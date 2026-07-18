@@ -80,7 +80,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         // Keep these pixels appearance-independent. A template image would be
         // re-tinted by AppKit while the menu bar itself crossfades between
         // Spaces, producing one mismatched frame during an active animation.
-        accentColor.withAlphaComponent(0.32).setFill()
+        accentColor.withAlphaComponent(0.55).setFill()
         for index in 0..<count {
             let center = NSPoint(
                 x: CGFloat(index) * StatusItemArtwork.itemWidth

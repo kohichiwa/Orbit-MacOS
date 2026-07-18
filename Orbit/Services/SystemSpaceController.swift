@@ -12,33 +12,47 @@ protocol SpaceControlling: AnyObject {
 enum SpaceDirection: Equatable, Sendable {
     case previous
     case next
-
-    var keyCode: Int { self == .previous ? 123 : 124 }
 }
 
 enum SystemSpaceControllerError: LocalizedError {
     case eventPostingPermissionRequired
     case eventCreationFailed
-    case automationPermissionRequired
 
     var errorDescription: String? {
         switch self {
         case .eventPostingPermissionRequired:
-            "Для переключения рабочих столов разрешите Orbit управление компьютером."
+            L10n.string("error.accessibility.required")
         case .eventCreationFailed:
-            "Не удалось отправить системную команду переключения."
-        case .automationPermissionRequired:
-            "Разрешите Orbit управлять System Events в разделе «Автоматизация» системных настроек."
+            L10n.string("error.command.failed")
         }
     }
 }
 
 @MainActor
 final class SystemSpaceController: SpaceControlling {
+    // Dock-swipe event fields used by macOS for native Space navigation.
+    // This is the same three-phase mechanism used by Spaceman's
+    // GestureSwitcher (began -> changed -> ended).
+    private static let eventTypeField = CGEventField(rawValue: 55)!
+    private static let gestureHIDType = CGEventField(rawValue: 110)!
+    private static let swipeMotion = CGEventField(rawValue: 123)!
+    private static let swipeProgress = CGEventField(rawValue: 124)!
+    private static let swipePositionX = CGEventField(rawValue: 125)!
+    private static let swipeVelocityX = CGEventField(rawValue: 129)!
+    private static let swipeVelocityY = CGEventField(rawValue: 130)!
+    private static let gesturePhase = CGEventField(rawValue: 132)!
+    private static let gesturePhase2 = CGEventField(rawValue: 134)!
+    private static let gestureFlavor = CGEventField(rawValue: 138)!
+    private static let eventTimestamp = CGEventField(rawValue: 169)!
+
+    private static let phaseBegan: Int64 = 1
+    private static let phaseChanged: Int64 = 2
+    private static let phaseEnded: Int64 = 4
+    private static let gestureVelocity = 10.0
+
     nonisolated deinit {}
 
-    /// The check never presents a prompt. Permission is requested only from the
-    /// explicit context-menu action, never from a dot click.
+    /// This state is used only to describe the permission in the settings menu.
     var canPostEvents: Bool { AXIsProcessTrusted() }
 
     @discardableResult
@@ -51,37 +65,47 @@ final class SystemSpaceController: SpaceControlling {
     }
 
     func move(_ direction: SpaceDirection) async throws {
-        guard canPostEvents else {
-            throw SystemSpaceControllerError.eventPostingPermissionRequired
-        }
-
-        let keyCode = direction.keyCode
-        let failure: ScriptFailure? = await Task.detached(priority: .userInitiated) {
-            () -> ScriptFailure? in
-            let source = "tell application \"System Events\" to key code "
-                + "\(keyCode) using {control down}"
-            guard let script = NSAppleScript(source: source) else {
-                return ScriptFailure(code: 0)
-            }
-            var error: NSDictionary?
-            script.executeAndReturnError(&error)
-            guard let error else { return nil }
-            return ScriptFailure(
-                code: error[NSAppleScript.errorNumber] as? Int ?? 0
+        let goRight = direction == .next
+        for phase in [Self.phaseBegan, Self.phaseChanged, Self.phaseEnded] {
+            try postDockSwipe(
+                phase: phase,
+                goRight: goRight,
+                velocity: Self.gestureVelocity
             )
-        }.value
-
-        guard let failure else { return }
-        if abs(failure.code) == 1743 {
-            throw SystemSpaceControllerError.automationPermissionRequired
         }
-        if abs(failure.code) == 1002 {
-            throw SystemSpaceControllerError.eventPostingPermissionRequired
-        }
-        throw SystemSpaceControllerError.eventCreationFailed
     }
-}
 
-private struct ScriptFailure: Sendable {
-    let code: Int
+    private func postDockSwipe(
+        phase: Int64,
+        goRight: Bool,
+        velocity: Double
+    ) throws {
+        guard let event = CGEvent(source: nil) else {
+            throw SystemSpaceControllerError.eventCreationFailed
+        }
+
+        let progress = goRight ? 1.0 : -1.0
+        let horizontalVelocity = goRight ? velocity : -velocity
+
+        event.setIntegerValueField(Self.eventTypeField, value: 30)
+        event.setIntegerValueField(Self.gestureHIDType, value: 23)
+        event.setIntegerValueField(Self.gesturePhase, value: phase)
+        event.setDoubleValueField(Self.swipeProgress, value: progress)
+        event.setIntegerValueField(Self.swipeMotion, value: 1)
+        event.setDoubleValueField(
+            Self.swipeVelocityX,
+            value: horizontalVelocity
+        )
+        event.setDoubleValueField(Self.swipeVelocityY, value: 0)
+
+        event.setIntegerValueField(Self.gesturePhase2, value: phase)
+        event.setDoubleValueField(Self.gestureFlavor, value: 3)
+        event.setDoubleValueField(
+            Self.eventTimestamp,
+            value: Double(mach_absolute_time())
+        )
+        event.setDoubleValueField(Self.swipePositionX, value: 0.1)
+
+        event.post(tap: .cgSessionEventTap)
+    }
 }

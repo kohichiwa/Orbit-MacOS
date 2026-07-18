@@ -1,21 +1,24 @@
 import AppKit
 import Combine
-import QuartzCore
 
 @MainActor
 final class StatusBarController: NSObject {
     private let viewModel: SpaceViewModel
+    private let settings: AppSettings
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var cancellables = Set<AnyCancellable>()
     private var renderedSpaceCount = 0
     private var renderedActiveIndex: Int?
-    private var renderedPillFrame: StatusPillFrame?
-    private var artworkRenderer: StatusIndicatorImageRenderer?
-    private var displayLink: CADisplayLink?
-    private var pillMotion: StatusPillMotion?
+    private var renderedIndicatorKinds: [SpaceIndicatorKind] = []
+    private var renderedIndicatorIdentifiers: [Int64] = []
+    private var isAnimatingStructureChange = false
+    private var needsStructureRefresh = false
+    private var indicatorView: StatusIndicatorView?
+    private var selectedIndicatorColorIndex: Int?
 
-    init(viewModel: SpaceViewModel) {
+    init(viewModel: SpaceViewModel, settings: AppSettings) {
         self.viewModel = viewModel
+        self.settings = settings
         super.init()
         configureStatusItem()
         observeChanges()
@@ -27,35 +30,18 @@ final class StatusBarController: NSObject {
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleNone
         button.contentTintColor = nil
-        button.toolTip = "Orbit — рабочие столы"
+        button.toolTip = L10n.string("status.tooltip")
         button.target = self
         button.action = #selector(statusItemClicked(_:))
-        button.sendAction(on: .leftMouseUp)
-        button.setAccessibilityLabel("Рабочие столы")
-
-        let rightClick = NSClickGestureRecognizer(
-            target: self,
-            action: #selector(statusItemRightClicked(_:))
-        )
-        rightClick.buttonMask = 0x2
-        button.addGestureRecognizer(rightClick)
+        button.sendAction(on: [.rightMouseDown])
+        button.setAccessibilityLabel(L10n.string("accessibility.workspaces"))
 
         updateArtwork(for: viewModel.spaceCount)
-        configureDisplayLink(for: button)
         updateActivePill(to: viewModel.activeIndex, animated: false)
         updateToolTip(viewModel.message)
     }
 
     private func observeChanges() {
-        viewModel.$spaceCount
-            .removeDuplicates()
-            .dropFirst()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] count in
-                self?.updateArtwork(for: count)
-            }
-            .store(in: &cancellables)
-
         viewModel.$activeIndex
             .removeDuplicates()
             .dropFirst()
@@ -63,6 +49,15 @@ final class StatusBarController: NSObject {
             .sink { [weak self] index in
                 self?.updateActivePill(to: index, animated: true)
                 self?.updateAccessibilityValue(index)
+            }
+            .store(in: &cancellables)
+
+        viewModel.$indicators
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] indicators in
+                self?.transitionArtwork(to: indicators)
             }
             .store(in: &cancellables)
 
@@ -74,117 +69,165 @@ final class StatusBarController: NSObject {
                 self?.updateToolTip(message)
             }
             .store(in: &cancellables)
+
+        settings.$animateIndicator
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isEnabled in
+                guard let self, !isEnabled else { return }
+                if let index = self.renderedActiveIndex {
+                    self.indicatorView?.setActiveIndex(index, animated: false)
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$indicatorColors
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateArtwork(for: self.renderedSpaceCount, force: true)
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest(
+            settings.$indicatorSizeScale,
+            settings.$indicatorSpacingScale
+        )
+        .removeDuplicates { previous, current in
+            previous.0 == current.0 && previous.1 == current.1
+        }
+        .dropFirst()
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _ in
+            guard let self else { return }
+            self.updateArtwork(for: self.renderedSpaceCount, force: true)
+        }
+        .store(in: &cancellables)
     }
 
-    private func configureDisplayLink(for button: NSStatusBarButton) {
-        let displayLink = button.displayLink(
-            target: self,
-            selector: #selector(advancePillMotion(_:))
-        )
-        displayLink.preferredFrameRateRange = CAFrameRateRange(
-            minimum: 60,
-            maximum: 120,
-            preferred: 60
-        )
-        displayLink.isPaused = true
-        displayLink.add(to: .main, forMode: .common)
-        self.displayLink = displayLink
-    }
-
-    private func updateArtwork(for count: Int) {
+    private func updateArtwork(for count: Int, force: Bool = false) {
         let count = max(count, 1)
-        guard count != renderedSpaceCount else { return }
+        guard force || count != renderedSpaceCount else { return }
         renderedSpaceCount = count
+        renderedIndicatorIdentifiers = viewModel.indicators.map(\.id)
+        let kinds = viewModel.indicatorKinds.count == count
+            ? viewModel.indicatorKinds
+            : (0..<count).map { .desktop(colorIndex: $0) }
+        renderedIndicatorKinds = kinds
+        let desktopCount = kinds.reduce(into: 0) { result, kind in
+            if case .desktop(let colorIndex) = kind {
+                result = max(result, colorIndex + 1)
+            }
+        }
 
-        statusItem.length = StatusItemArtwork.preferredWidth(for: count)
+        let sizeScale = CGFloat(settings.indicatorSizeScale)
+        let spacingScale = CGFloat(settings.indicatorSpacingScale)
+        statusItem.length = StatusItemArtwork.preferredWidth(
+            for: count,
+            sizeScale: sizeScale,
+            spacingScale: spacingScale
+        )
         guard let button = statusItem.button else { return }
 
-        let renderer = StatusIndicatorImageRenderer(count: count)
-        artworkRenderer = renderer
-
-        // This exact NSImage instance remains installed until the number of
-        // Spaces changes. Animation only redraws its bitmap pixels; it
-        // never replaces the button image or modifies the view hierarchy.
-        button.image = renderer.image
+        button.image = nil
         button.contentTintColor = nil
+
+        indicatorView?.removeFromSuperview()
+        let indicatorView = StatusIndicatorView(
+            count: count,
+            sizeScale: sizeScale,
+            spacingScale: spacingScale,
+            indicatorKinds: kinds,
+            indicatorColors: settings.indicatorColors(for: desktopCount)
+        )
+        button.addSubview(indicatorView)
+        NSLayoutConstraint.activate([
+            indicatorView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            indicatorView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            indicatorView.topAnchor.constraint(equalTo: button.topAnchor),
+            indicatorView.bottomAnchor.constraint(equalTo: button.bottomAnchor)
+        ])
+        self.indicatorView = indicatorView
 
         if let index = viewModel.activeIndex, (0..<count).contains(index) {
             renderedActiveIndex = index
-            renderPill(.resting(at: StatusItemArtwork.centerX(for: index)))
+            indicatorView.setActiveIndex(index, animated: false)
         } else {
             renderedActiveIndex = nil
-            renderedPillFrame = nil
-            renderer.update(pill: nil)
-            button.needsDisplay = true
+            indicatorView.setActiveIndex(nil, animated: false)
         }
     }
 
+    private func transitionArtwork(to indicators: [SpaceIndicatorEntry]) {
+        guard !isAnimatingStructureChange else {
+            needsStructureRefresh = true
+            return
+        }
+
+        let newIdentifiers = indicators.map(\.id)
+        guard
+            let removedIndex = singleRemovedIndex(
+                from: renderedIndicatorIdentifiers,
+                to: newIdentifiers
+            ),
+            indicatorView != nil
+        else {
+            updateArtwork(for: indicators.count, force: true)
+            return
+        }
+
+        isAnimatingStructureChange = true
+        let wasFullscreen = renderedIndicatorKinds.indices.contains(removedIndex)
+            && renderedIndicatorKinds[removedIndex].isFullscreen
+        indicatorView?.animateRemoval(
+            at: removedIndex,
+            resultingCount: indicators.count,
+            fullscreen: wasFullscreen
+        ) { [weak self] in
+            guard let self else { return }
+            self.isAnimatingStructureChange = false
+            self.updateArtwork(for: self.viewModel.spaceCount, force: true)
+            if self.needsStructureRefresh {
+                self.needsStructureRefresh = false
+                self.updateArtwork(for: self.viewModel.spaceCount, force: true)
+            }
+        }
+    }
+
+    private func singleRemovedIndex(
+        from oldIdentifiers: [Int64],
+        to newIdentifiers: [Int64]
+    ) -> Int? {
+        guard oldIdentifiers.count == newIdentifiers.count + 1 else {
+            return nil
+        }
+        for index in oldIdentifiers.indices {
+            var candidate = oldIdentifiers
+            candidate.remove(at: index)
+            if candidate == newIdentifiers { return index }
+        }
+        return nil
+    }
+
     private func updateActivePill(to index: Int?, animated: Bool) {
+        guard !isAnimatingStructureChange else { return }
         guard
             let index,
             (0..<renderedSpaceCount).contains(index)
         else {
-            stopPillMotion()
             renderedActiveIndex = nil
-            renderedPillFrame = nil
-            artworkRenderer?.update(pill: nil)
-            statusItem.button?.needsDisplay = true
+            indicatorView?.setActiveIndex(nil, animated: false)
             return
         }
 
-        let previousIndex = renderedActiveIndex
-        let targetX = StatusItemArtwork.centerX(for: index)
+        let shouldAnimate = animated
+            && settings.animateIndicator
+            && renderedActiveIndex != nil
+            && renderedActiveIndex != index
         renderedActiveIndex = index
-
-        guard
-            animated,
-            let previousIndex,
-            previousIndex != index,
-            !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        else {
-            stopPillMotion()
-            renderPill(.resting(at: targetX))
-            return
-        }
-
-        let sourceX = pillMotion == nil
-            ? StatusItemArtwork.centerX(for: previousIndex)
-            : renderedPillFrame?.x ?? StatusItemArtwork.centerX(for: previousIndex)
-        let motion = StatusPillMotion(
-            fromX: sourceX,
-            toX: targetX,
-            initialWidth: renderedPillFrame?.width ?? 12,
-            initialHeight: renderedPillFrame?.height ?? 7,
-            startTime: CACurrentMediaTime()
-        )
-        pillMotion = motion
-        renderPill(motion.frame(at: motion.startTime))
-        displayLink?.isPaused = false
-    }
-
-    @objc private func advancePillMotion(_ displayLink: CADisplayLink) {
-        guard let pillMotion else {
-            displayLink.isPaused = true
-            return
-        }
-
-        let frame = pillMotion.frame(at: displayLink.targetTimestamp)
-        renderPill(frame)
-        if frame.isComplete {
-            self.pillMotion = nil
-            displayLink.isPaused = true
-        }
-    }
-
-    private func renderPill(_ frame: StatusPillFrame) {
-        renderedPillFrame = frame
-        artworkRenderer?.update(pill: frame)
-        statusItem.button?.needsDisplay = true
-    }
-
-    private func stopPillMotion() {
-        pillMotion = nil
-        displayLink?.isPaused = true
+        indicatorView?.setActiveIndex(index, animated: shouldAnimate)
     }
 
     private func updateAccessibilityValue(_ index: Int?) {
@@ -193,51 +236,99 @@ final class StatusBarController: NSObject {
             return
         }
         statusItem.button?.setAccessibilityValue(
-            "Рабочий стол \(index + 1) из \(renderedSpaceCount)"
+            L10n.format(
+                "accessibility.workspace.position",
+                index + 1,
+                renderedSpaceCount
+            )
         )
     }
 
     private func updateToolTip(_ message: String?) {
-        statusItem.button?.toolTip = message ?? "Orbit — рабочие столы"
+        statusItem.button?.toolTip = message ?? L10n.string("status.tooltip")
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else { return }
-        let point = sender.convert(event.locationInWindow, from: nil)
-        let contentWidth = CGFloat(renderedSpaceCount) * StatusItemArtwork.itemWidth
-        let leadingEdge = max((sender.bounds.width - contentWidth) / 2, 0)
-        let relativeX = point.x - leadingEdge
-        guard relativeX >= 0, relativeX < contentWidth else { return }
+        guard NSApp.currentEvent?.type == .rightMouseDown else { return }
 
-        let index = Int(relativeX / StatusItemArtwork.itemWidth)
-        Task { await viewModel.select(index) }
-    }
+        // NSStatusBarButton's window coordinates can be invalid in the narrow
+        // gaps at the top and bottom of the menu bar. Capture stable screen
+        // coordinates synchronously, before AppKit reuses the event object.
+        let buttonFrame = sender.window?.convertToScreen(sender.frame) ?? .zero
 
-    @objc private func statusItemRightClicked(_ recognizer: NSClickGestureRecognizer) {
-        guard
-            let button = recognizer.view as? NSStatusBarButton,
-            let event = NSApp.currentEvent
-        else { return }
-        NSMenu.popUpContextMenu(makeContextMenu(), with: event, for: button)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak sender] in
+            guard let self, let sender else { return }
+            let menu = self.makeContextMenu()
+            menu.popUp(
+                positioning: nil,
+                at: CGPoint(x: buttonFrame.minX, y: buttonFrame.minY),
+                in: nil
+            )
+            sender.isHighlighted = false
+        }
     }
 
     private func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
-        if let message = viewModel.message {
-            let status = NSMenuItem(title: message, action: nil, keyEquivalent: "")
-            status.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: message)
-            status.isEnabled = false
-            menu.addItem(status)
-            menu.addItem(.separator())
-        }
-
-        menu.addItem(item("Обновить", action: #selector(refresh), symbol: "arrow.clockwise"))
-        if !viewModel.canPostEvents {
-            menu.addItem(item("Разрешить управление…", action: #selector(requestAccess), symbol: "hand.raised"))
-        }
+        menu.addItem(item(L10n.string("menu.refresh"), action: #selector(refresh), symbol: "arrow.clockwise"))
+        menu.addItem(settingsMenuItem())
         menu.addItem(.separator())
-        menu.addItem(item("Завершить Orbit", action: #selector(quit), symbol: "power", key: "q"))
+        menu.addItem(item(L10n.string("menu.quit"), action: #selector(quit), symbol: "power", key: "q"))
         return menu
+    }
+
+    private func settingsMenuItem() -> NSMenuItem {
+        let title = L10n.string("menu.settings")
+        let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        parent.image = NSImage(
+            systemSymbolName: "gearshape",
+            accessibilityDescription: title
+        )
+
+        let submenu = NSMenu(title: title)
+        let launchAtLogin = item(
+            L10n.string("menu.launchAtLogin"),
+            action: #selector(toggleLaunchAtLogin),
+            symbol: "person.crop.circle.badge.checkmark"
+        )
+        launchAtLogin.state = settings.launchAtLoginState
+        submenu.addItem(launchAtLogin)
+
+        let animation = item(
+            L10n.string("menu.animation"),
+            action: #selector(toggleAnimation),
+            symbol: "sparkles"
+        )
+        animation.state = settings.animateIndicator ? .on : .off
+        submenu.addItem(animation)
+        submenu.addItem(.separator())
+        submenu.addItem(indicatorColorsControlItem())
+        submenu.addItem(
+            item(
+                L10n.string("menu.resetIndicatorColors"),
+                action: #selector(resetIndicatorColors),
+                symbol: "arrow.counterclockwise"
+            )
+        )
+        submenu.addItem(.separator())
+        submenu.addItem(
+            sliderItem(
+                title: L10n.string("menu.indicatorSize"),
+                value: settings.indicatorSizeScale,
+                steps: AppSettings.indicatorSizeSteps,
+                action: #selector(indicatorSizeChanged(_:))
+            )
+        )
+        submenu.addItem(
+            sliderItem(
+                title: L10n.string("menu.indicatorSpacing"),
+                value: settings.indicatorSpacingScale,
+                steps: AppSettings.indicatorSpacingSteps,
+                action: #selector(indicatorSpacingChanged(_:))
+            )
+        )
+        parent.submenu = submenu
+        return parent
     }
 
     private func item(_ title: String, action: Selector, symbol: String, key: String = "") -> NSMenuItem {
@@ -247,12 +338,200 @@ final class StatusBarController: NSObject {
         return item
     }
 
+    private func sliderItem(
+        title: String,
+        value: Double,
+        steps: [Double],
+        action: Selector
+    ) -> NSMenuItem {
+        precondition(steps.count >= 2)
+        let menuItem = NSMenuItem()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 54))
+
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let slider = NSSlider(
+            value: value,
+            minValue: steps[0],
+            maxValue: steps[steps.count - 1],
+            target: self,
+            action: action
+        )
+        slider.isContinuous = true
+        slider.controlSize = .small
+        slider.numberOfTickMarks = steps.count
+        slider.tickMarkPosition = .below
+        slider.allowsTickMarkValuesOnly = true
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.setAccessibilityLabel(title)
+
+        container.addSubview(label)
+        container.addSubview(slider)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            slider.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            slider.trailingAnchor.constraint(equalTo: label.trailingAnchor),
+            slider.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 3)
+        ])
+        menuItem.view = container
+        return menuItem
+    }
+
+    private func indicatorColorsControlItem() -> NSMenuItem {
+        let menuItem = NSMenuItem()
+        let title = L10n.string("menu.indicatorColor")
+        let colorIndices = renderedDesktopColorIndices
+        let desktopCount = colorIndices.count
+        let colors = settings.indicatorColors(for: renderedDesktopColorSlotCount)
+        let maximumButtonsPerRow = 8
+        let rowCount = max(
+            Int(ceil(Double(desktopCount) / Double(maximumButtonsPerRow))),
+            1
+        )
+        let containerHeight = CGFloat(30 + rowCount * 24)
+        let container = NSView(
+            frame: NSRect(x: 0, y: 0, width: 280, height: containerHeight)
+        )
+
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6)
+        ])
+
+        var previousRow: NSStackView?
+        for row in 0..<rowCount {
+            let rowStart = row * maximumButtonsPerRow
+            let rowEnd = min(rowStart + maximumButtonsPerRow, desktopCount)
+            let stack = NSStackView()
+            stack.orientation = .horizontal
+            stack.alignment = .centerY
+            stack.spacing = 4
+            stack.translatesAutoresizingMaskIntoConstraints = false
+
+            for position in rowStart..<rowEnd {
+                let colorIndex = colorIndices[position]
+                let itemTitle = L10n.format("menu.indicatorNumber", position + 1)
+                let button = NSButton()
+                button.isBordered = false
+                button.image = colorSwatch(colors[colorIndex], size: 18)
+                button.imageScaling = .scaleNone
+                button.target = self
+                button.action = #selector(chooseIndicatorColor(_:))
+                button.tag = colorIndex
+                button.toolTip = itemTitle
+                button.setAccessibilityLabel(itemTitle)
+                button.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    button.widthAnchor.constraint(equalToConstant: 22),
+                    button.heightAnchor.constraint(equalToConstant: 22)
+                ])
+                stack.addArrangedSubview(button)
+            }
+
+            container.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+                stack.trailingAnchor.constraint(lessThanOrEqualTo: label.trailingAnchor),
+                stack.topAnchor.constraint(
+                    equalTo: previousRow?.bottomAnchor ?? label.bottomAnchor,
+                    constant: 3
+                )
+            ])
+            previousRow = stack
+        }
+
+        menuItem.view = container
+        return menuItem
+    }
+
+    private func colorSwatch(_ color: NSColor, size: CGFloat = 16) -> NSImage {
+        NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let swatchRect = rect.insetBy(dx: 2, dy: 2)
+            let path = NSBezierPath(ovalIn: swatchRect)
+            color.setFill()
+            path.fill()
+            NSColor.separatorColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            return true
+        }
+    }
+
+    private func presentColorPanel(for index: Int) {
+        guard renderedDesktopColorIndices.contains(index) else { return }
+        selectedIndicatorColorIndex = index
+
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.isContinuous = true
+        panel.color = settings.indicatorColors(for: renderedDesktopColorSlotCount)[index]
+        panel.setTarget(self)
+        panel.setAction(#selector(indicatorColorChanged(_:)))
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private var renderedDesktopCount: Int {
+        renderedDesktopColorIndices.count
+    }
+
+    private var renderedDesktopColorIndices: [Int] {
+        renderedIndicatorKinds.compactMap { kind in
+            guard case .desktop(let colorIndex) = kind else { return nil }
+            return colorIndex
+        }
+    }
+
+    private var renderedDesktopColorSlotCount: Int {
+        (renderedDesktopColorIndices.max() ?? 0) + 1
+    }
+
+    @objc private func chooseIndicatorColor(_ sender: NSButton) {
+        let index = sender.tag
+        sender.enclosingMenuItem?.menu?.cancelTracking()
+        DispatchQueue.main.async { [weak self] in
+            self?.presentColorPanel(for: index)
+        }
+    }
+
+    @objc private func resetIndicatorColors() {
+        settings.resetIndicatorColors()
+        selectedIndicatorColorIndex = nil
+        NSColorPanel.shared.orderOut(nil)
+    }
+
     @objc private func refresh() {
         Task { await viewModel.refresh() }
     }
 
-    @objc private func requestAccess() {
-        _ = viewModel.requestEventPostingAccess()
+    @objc private func toggleLaunchAtLogin() {
+        settings.toggleLaunchAtLogin()
+    }
+
+    @objc private func toggleAnimation() {
+        settings.toggleAnimation()
+    }
+
+    @objc private func indicatorSizeChanged(_ sender: NSSlider) {
+        settings.setIndicatorSizeScale(sender.doubleValue)
+    }
+
+    @objc private func indicatorSpacingChanged(_ sender: NSSlider) {
+        settings.setIndicatorSpacingScale(sender.doubleValue)
+    }
+
+    @objc private func indicatorColorChanged(_ sender: NSColorPanel) {
+        guard let index = selectedIndicatorColorIndex else { return }
+        settings.setIndicatorColor(sender.color, at: index)
     }
 
     @objc private func quit() {

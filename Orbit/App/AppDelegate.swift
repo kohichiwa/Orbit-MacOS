@@ -2,13 +2,24 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let viewModel = SpaceViewModel()
+    let viewModel: SpaceViewModel
+    let settings: AppSettings
     private var statusBarController: StatusBarController?
+
+    override init() {
+        let settings = AppSettings()
+        self.settings = settings
+        viewModel = SpaceViewModel(colorAssignments: settings)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         terminateOlderOrbitInstances()
         NSApp.setActivationPolicy(.accessory)
-        statusBarController = StatusBarController(viewModel: viewModel)
+        statusBarController = StatusBarController(
+            viewModel: viewModel,
+            settings: settings
+        )
         viewModel.start()
     }
 

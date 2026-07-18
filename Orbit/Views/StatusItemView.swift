@@ -14,7 +14,7 @@ struct StatusItemView: View {
         .padding(.horizontal, 4)
         .frame(height: 22)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Рабочие столы")
+        .accessibilityLabel(L10n.string("accessibility.workspaces"))
     }
 
     static func preferredWidth(for count: Int) -> CGFloat {
@@ -51,8 +51,8 @@ struct SpaceDotsView: View {
                     flowDirection: flowDirection,
                     reduceMotion: reduceMotion
                 )
-                .frame(width: 14, height: 20)
-                .offset(x: CGFloat(activeIndex) * 14)
+                .frame(width: StatusItemArtwork.itemWidth, height: 22)
+                .offset(x: CGFloat(activeIndex) * StatusItemArtwork.itemWidth)
                 .animation(
                     reduceMotion
                         ? .easeOut(duration: 0.08)
@@ -119,8 +119,8 @@ private struct ActiveSpacePill: View {
             // flips between its light and dark appearances.
             .fill(Color(nsColor: .controlAccentColor))
             .frame(
-                width: reduceMotion ? 12 : liquidPhase.size.width,
-                height: reduceMotion ? 7 : liquidPhase.size.height
+                width: reduceMotion ? StatusItemArtwork.scaled(12) : liquidPhase.size.width,
+                height: reduceMotion ? StatusItemArtwork.scaled(7) : liquidPhase.size.height
             )
             .offset(
                 x: reduceMotion
@@ -137,17 +137,29 @@ private enum LiquidPhase {
 
     var size: CGSize {
         switch self {
-        case .rest: CGSize(width: 12, height: 7)
-        case .stretch: CGSize(width: 19.5, height: 5.8)
-        case .squash: CGSize(width: 10.5, height: 7.8)
+        case .rest:
+            CGSize(
+                width: StatusItemArtwork.scaled(12),
+                height: StatusItemArtwork.scaled(7)
+            )
+        case .stretch:
+            CGSize(
+                width: StatusItemArtwork.scaled(19.5),
+                height: StatusItemArtwork.scaled(5.8)
+            )
+        case .squash:
+            CGSize(
+                width: StatusItemArtwork.scaled(10.5),
+                height: StatusItemArtwork.scaled(7.8)
+            )
         }
     }
 
     var directionalOffset: CGFloat {
         switch self {
         case .rest: 0
-        case .stretch: -1.8
-        case .squash: 0.8
+        case .stretch: StatusItemArtwork.scaled(-1.8)
+        case .squash: StatusItemArtwork.scaled(0.8)
         }
     }
 }
@@ -165,23 +177,38 @@ private struct SpaceDotButton: View {
             ZStack {
                 Circle()
                     .fill(.primary.opacity(0.28))
-                    .frame(width: 4.5, height: 4.5)
+                    .frame(
+                        width: StatusItemArtwork.scaled(4.5),
+                        height: StatusItemArtwork.scaled(4.5)
+                    )
                     .scaleEffect(isActive ? 0.45 : 1)
                     .opacity(isActive ? 0 : 1)
             }
-            .frame(width: 14, height: 20)
+            .frame(width: StatusItemArtwork.itemWidth, height: 22)
             .background {
                 Circle()
                     .fill(.primary.opacity(isHovered ? 0.07 : 0))
-                    .frame(width: 14, height: 14)
+                    .frame(
+                        width: StatusItemArtwork.itemWidth,
+                        height: StatusItemArtwork.itemWidth
+                    )
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(PressedButtonStyle(scale: 0.97))
         .onHover { isHovered = $0 }
-        .help(isActive ? "Текущий рабочий стол \(index + 1)" : "Перейти на рабочий стол \(index + 1)")
-        .accessibilityLabel("Рабочий стол \(index + 1)")
-        .accessibilityValue(isActive ? "Выбран" : "Не выбран")
+        .help(
+            L10n.format(
+                isActive ? "help.currentWorkspace" : "help.switchWorkspace",
+                index + 1
+            )
+        )
+        .accessibilityLabel(L10n.format("accessibility.workspace", index + 1))
+        .accessibilityValue(
+            L10n.string(
+                isActive ? "accessibility.selected" : "accessibility.unselected"
+            )
+        )
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.1),
             value: isActive

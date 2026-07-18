@@ -7,7 +7,12 @@ struct StatusPillFrame: Equatable, Sendable {
     let isComplete: Bool
 
     nonisolated static func resting(at x: CGFloat) -> Self {
-        Self(x: x, width: 12, height: 7, isComplete: true)
+        Self(
+            x: x,
+            width: StatusItemArtwork.scaled(12),
+            height: StatusItemArtwork.scaled(7),
+            isComplete: true
+        )
     }
 }
 
@@ -22,8 +27,8 @@ struct StatusPillMotion {
     init(
         fromX: CGFloat,
         toX: CGFloat,
-        initialWidth: CGFloat = 12,
-        initialHeight: CGFloat = 7,
+        initialWidth: CGFloat = StatusItemArtwork.scaled(12),
+        initialHeight: CGFloat = StatusItemArtwork.scaled(7),
         startTime: TimeInterval
     ) {
         self.fromX = fromX
@@ -57,17 +62,28 @@ struct StatusPillMotion {
             abs(toX - fromX) / StatusItemArtwork.itemWidth,
             1
         )
-        let stretchedWidth = 18.8 + min(crossedSpaces - 1, 4) * 0.4
+        let stretchedWidth = StatusItemArtwork.scaled(18.8)
+            + min(crossedSpaces - 1, 4) * StatusItemArtwork.scaled(0.4)
 
         return StatusPillFrame(
             x: x,
             width: phasedValue(
                 progress: progress,
-                values: [initialWidth, stretchedWidth, 10.9, 12]
+                values: [
+                    initialWidth,
+                    stretchedWidth,
+                    StatusItemArtwork.scaled(10.9),
+                    StatusItemArtwork.scaled(12)
+                ]
             ),
             height: phasedValue(
                 progress: progress,
-                values: [initialHeight, 5.9, 7.65, 7]
+                values: [
+                    initialHeight,
+                    StatusItemArtwork.scaled(5.9),
+                    StatusItemArtwork.scaled(7.65),
+                    StatusItemArtwork.scaled(7)
+                ]
             ),
             isComplete: false
         )
