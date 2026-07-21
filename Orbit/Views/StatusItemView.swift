@@ -187,7 +187,6 @@ private struct SpaceDotButton: View {
         }
         .buttonStyle(PressedButtonStyle(scale: 0.97))
         .onHover { isHovered = $0 }
-        .help(isActive ? "Текущий рабочий стол \(index + 1)" : "Перейти на рабочий стол \(index + 1)")
         .accessibilityLabel("Рабочий стол \(index + 1)")
         .accessibilityValue(isActive ? "Выбран" : "Не выбран")
         .animation(

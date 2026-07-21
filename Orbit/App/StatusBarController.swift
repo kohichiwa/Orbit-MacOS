@@ -107,7 +107,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleNone
         button.contentTintColor = nil
-        button.toolTip = "Orbit — рабочие столы"
         button.target = self
         button.action = #selector(statusItemClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseDown])
@@ -120,7 +119,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         configureDisplayLink(for: button)
         configureHoverTracking(for: button)
         updateActivePill(to: viewModel.activeIndex, animated: false)
-        updateToolTip(viewModel.message)
     }
 
     private func observeChanges() {
@@ -145,15 +143,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] index in
                 self?.updateActivePill(to: index, animated: true)
                 self?.updateAccessibilityValue(index)
-            }
-            .store(in: &cancellables)
-
-        viewModel.$message
-            .removeDuplicates()
-            .dropFirst()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] message in
-                self?.updateToolTip(message)
             }
             .store(in: &cancellables)
 
@@ -451,10 +440,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         statusItem.button?.setAccessibilityValue(
             "Рабочий стол \(index + 1) из \(renderedSpaceCount)"
         )
-    }
-
-    private func updateToolTip(_ message: String?) {
-        statusItem.button?.toolTip = message ?? "Orbit — рабочие столы"
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {

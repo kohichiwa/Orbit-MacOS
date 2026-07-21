@@ -185,7 +185,6 @@ private struct SettingsControls: View {
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
-                    .help("Сбросить цвета")
                     .accessibilityLabel("Сбросить цвета")
                 }
 
@@ -952,7 +951,6 @@ private struct IndicatorColorPalette: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(choice.title)
-                .help(choice.title)
             }
         }
         .padding(.horizontal, 14)

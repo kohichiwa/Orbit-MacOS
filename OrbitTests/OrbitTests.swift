@@ -676,6 +676,61 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testFullscreenThinOutlineSurroundsColoredStroke() throws {
+        let sizeScale: CGFloat = 1.7
+        let renderer = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorKinds: [.fullscreen(colorIndex: 0)],
+            indicatorColors: [.systemYellow],
+            showsThinOutline: true,
+            sizeScale: sizeScale
+        )
+        renderer.update(
+            pill: .resting(
+                at: StatusItemArtwork.centerX(
+                    for: 0,
+                    sizeScale: sizeScale
+                ),
+                sizeScale: sizeScale
+            ),
+            activeIndex: 0
+        )
+
+        let data = try XCTUnwrap(renderer.image.tiffRepresentation)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+        let centerX = bitmap.pixelsWide / 2
+        let centerY = bitmap.pixelsHigh / 2
+        let leftHalf = (0..<centerX).compactMap { x -> (Int, NSColor)? in
+            guard let color = bitmap.colorAt(x: x, y: centerY) else {
+                return nil
+            }
+            return (x, color)
+        }
+        let contrastPixels = leftHalf.filter { _, color in
+            color.alphaComponent > 0.04
+                && color.redComponent < 0.35
+                && color.greenComponent < 0.35
+                && color.blueComponent < 0.35
+        }.map(\.0)
+        let coloredPixels = leftHalf.filter { _, color in
+            color.alphaComponent > 0.2
+                && color.redComponent > 0.65
+                && color.greenComponent > 0.45
+        }.map(\.0)
+
+        XCTAssertFalse(contrastPixels.isEmpty)
+        XCTAssertFalse(coloredPixels.isEmpty)
+        XCTAssertLessThan(
+            try XCTUnwrap(contrastPixels.min()),
+            try XCTUnwrap(coloredPixels.min())
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(contrastPixels.max()),
+            try XCTUnwrap(coloredPixels.max())
+        )
+    }
+
+    @MainActor
     func testFullscreenIndicatorUsesMatchingInnerOutline() throws {
         let renderer = StatusIndicatorImageRenderer(
             count: 3,

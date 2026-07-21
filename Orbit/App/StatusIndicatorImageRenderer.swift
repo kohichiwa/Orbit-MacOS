@@ -329,14 +329,24 @@ nonisolated final class StatusIndicatorImageRenderer {
         lineWidth: CGFloat
     ) {
         if showsThinOutline {
+            let outlineWidth = thinOutlineWidth
             drawOutline(
                 in: rect,
-                color: contrastingOutlineColor(
+                color: thinOutlineColor(
                     for: color,
                     opacity: thinOutlineOpacity
                 ),
-                lineWidth: lineWidth + thinOutlineWidth
+                lineWidth: lineWidth + outlineWidth * 2
             )
+            drawOutline(
+                in: rect.insetBy(
+                    dx: outlineWidth,
+                    dy: outlineWidth
+                ),
+                color: color.withAlphaComponent(strokeOpacity),
+                lineWidth: lineWidth
+            )
+            return
         }
         drawOutline(
             in: rect,
@@ -361,7 +371,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         guard showsThinOutline else { return }
         drawOutline(
             in: rect,
-            color: contrastingOutlineColor(
+            color: thinOutlineColor(
                 for: color,
                 opacity: outlineOpacity
             ),
@@ -369,7 +379,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         )
     }
 
-    private func contrastingOutlineColor(
+    private func thinOutlineColor(
         for color: NSColor,
         opacity: CGFloat
     ) -> NSColor {
@@ -518,6 +528,6 @@ nonisolated final class StatusIndicatorImageRenderer {
     }
 
     private var thinOutlineWidth: CGFloat {
-        max(0.5 * sizeScale, 0.5)
+        max(0.35 * sizeScale, 0.35)
     }
 }
