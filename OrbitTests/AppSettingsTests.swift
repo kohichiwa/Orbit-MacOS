@@ -35,6 +35,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(window.titlebarAppearsTransparent)
         XCTAssertFalse(window.hidesOnDeactivate)
         XCTAssertEqual(window.level, .floating)
+        XCTAssertGreaterThan(window.contentMaxSize.height, window.contentMaxSize.width)
         XCTAssertTrue(window.collectionBehavior.contains(.moveToActiveSpace))
         XCTAssertTrue(window.collectionBehavior.contains(.fullScreenAuxiliary))
 
@@ -59,7 +60,11 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.normalizedIndicatorSize(0.94), 0.9)
         XCTAssertEqual(AppSettings.normalizedIndicatorSize(0.96), 1)
         XCTAssertEqual(AppSettings.normalizedIndicatorSpacing(0.9), 1)
-        XCTAssertEqual(AppSettings.normalizedIndicatorSpacing(99), 1.5)
+        XCTAssertEqual(AppSettings.normalizedIndicatorSize(99), 1.7)
+        XCTAssertEqual(
+            AppSettings.normalizedIndicatorSpacing(99),
+            1 + 8.0 / 12
+        )
     }
 
     func testAnimationStyleDefaultsToSeamlessAndPersists() {
@@ -71,6 +76,16 @@ final class AppSettingsTests: XCTestCase {
             let restored = AppSettings(defaults: defaults)
             XCTAssertEqual(restored.indicatorAnimationStyle, .classic)
             XCTAssertEqual(IndicatorAnimationStyle.allCases.count, 2)
+        }
+    }
+
+    func testThinOutlineDefaultsOffAndPersists() {
+        withSettings { settings, defaults in
+            XCTAssertFalse(settings.showsIndicatorOutline)
+
+            settings.showsIndicatorOutline = true
+
+            XCTAssertTrue(AppSettings(defaults: defaults).showsIndicatorOutline)
         }
     }
 
@@ -128,6 +143,7 @@ final class AppSettingsTests: XCTestCase {
                 spacing: Double,
                 animationsEnabled: Bool,
                 style: IndicatorAnimationStyle,
+                outlineEnabled: Bool,
                 colorCount: Int
             )] = []
             let cancellable = settings.visualSettingsChanges.sink { change in
@@ -137,6 +153,7 @@ final class AppSettingsTests: XCTestCase {
                     settings.indicatorSpacingScale,
                     settings.animateIndicator,
                     settings.indicatorAnimationStyle,
+                    settings.showsIndicatorOutline,
                     settings.indicatorColors.count
                 ))
             }
@@ -146,13 +163,15 @@ final class AppSettingsTests: XCTestCase {
             settings.setIndicatorColor(.systemRed, at: 0)
             settings.animateIndicator = false
             settings.indicatorAnimationStyle = .classic
+            settings.showsIndicatorOutline = true
 
-            XCTAssertEqual(snapshots.count, 5)
+            XCTAssertEqual(snapshots.count, 6)
             XCTAssertEqual(snapshots[0].size, 1.2)
             XCTAssertEqual(snapshots[1].spacing, 1.25)
             XCTAssertEqual(snapshots[2].colorCount, 1)
             XCTAssertFalse(snapshots[3].animationsEnabled)
             XCTAssertEqual(snapshots[4].style, .classic)
+            XCTAssertTrue(snapshots[5].outlineEnabled)
             withExtendedLifetime(cancellable) {}
         }
     }

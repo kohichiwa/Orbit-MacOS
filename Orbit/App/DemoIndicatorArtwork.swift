@@ -14,6 +14,7 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
     let hoveredIndex: Int?
     let sizeScale: CGFloat
     let spacingScale: CGFloat
+    let showsThinOutline: Bool
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
     let reduceMotion: Bool
@@ -46,6 +47,7 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
             hoveredIndex: hoveredIndex,
             sizeScale: sizeScale,
             spacingScale: spacingScale,
+            showsThinOutline: showsThinOutline,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
             reduceMotion: reduceMotion
@@ -62,6 +64,7 @@ final class SyncedIndicatorArtworkView: NSView {
         let hoveredIndex: Int?
         let sizeScale: CGFloat
         let spacingScale: CGFloat
+        let showsThinOutline: Bool
         let animationsEnabled: Bool
         let animationStyle: IndicatorAnimationStyle
         let reduceMotion: Bool
@@ -147,6 +150,7 @@ final class SyncedIndicatorArtworkView: NSView {
         hoveredIndex: Int?,
         sizeScale: CGFloat,
         spacingScale: CGFloat,
+        showsThinOutline: Bool,
         animationsEnabled: Bool,
         animationStyle: IndicatorAnimationStyle,
         reduceMotion: Bool
@@ -169,6 +173,7 @@ final class SyncedIndicatorArtworkView: NSView {
             hoveredIndex: normalizedHoveredIndex,
             sizeScale: sizeScale,
             spacingScale: spacingScale,
+            showsThinOutline: showsThinOutline,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
             reduceMotion: reduceMotion
@@ -221,6 +226,7 @@ final class SyncedIndicatorArtworkView: NSView {
             hoveredIndex: newConfiguration.hoveredIndex,
             sizeScale: presentedConfiguration.sizeScale,
             spacingScale: presentedConfiguration.spacingScale,
+            showsThinOutline: newConfiguration.showsThinOutline,
             animationsEnabled: presentedConfiguration.animationsEnabled,
             animationStyle: presentedConfiguration.animationStyle,
             reduceMotion: newConfiguration.reduceMotion
@@ -268,6 +274,7 @@ final class SyncedIndicatorArtworkView: NSView {
     ) -> Bool {
         old.sizeScale != new.sizeScale
             || old.spacingScale != new.spacingScale
+            || old.showsThinOutline != new.showsThinOutline
             || old.reduceMotion != new.reduceMotion
     }
 
@@ -342,6 +349,7 @@ final class SyncedIndicatorArtworkView: NSView {
             count: configuration.indicators.count,
             indicatorKinds: configuration.indicators,
             indicatorColors: configuration.colors,
+            showsThinOutline: configuration.showsThinOutline,
             sizeScale: configuration.sizeScale,
             spacingScale: configuration.spacingScale,
             imageHeight: Self.previewHeight,

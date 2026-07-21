@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
-    private static let contentSize = NSSize(width: 680, height: 440)
+    private static let contentSize = NSSize(width: 540, height: 640)
 
     init(settings: AppSettings, viewModel: SpaceViewModel) {
         let rootView = SettingsRootView(
@@ -118,18 +118,19 @@ private struct SettingsRootView: View {
                     colors: settings.indicatorColors(for: colorSlotCount),
                     sizeScale: settings.indicatorSizeScale,
                     spacingScale: settings.indicatorSpacingScale,
+                    showsThinOutline: settings.showsIndicatorOutline,
                     animationsEnabled: settings.animateIndicator,
                     animationStyle: settings.indicatorAnimationStyle,
                     setColor: settings.setIndicatorColor
                 )
-                .frame(height: 194)
+                .frame(height: 218)
                 .ignoresSafeArea(.container, edges: .top)
 
                 SettingsControls(settings: settings)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 680, height: 440)
+        .frame(width: 540, height: 640)
         .background(Color.clear)
     }
 }
@@ -140,20 +141,23 @@ private struct SettingsSurfaceBackground: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
-                .frame(height: 156)
+                .frame(height: 180)
 
             LinearGradient(
                 colors: [
                     .clear,
-                    opaqueBackground.opacity(0.10),
-                    opaqueBackground.opacity(0.32),
-                    opaqueBackground.opacity(0.64),
+                    opaqueBackground.opacity(0.04),
+                    opaqueBackground.opacity(0.12),
+                    opaqueBackground.opacity(0.26),
+                    opaqueBackground.opacity(0.46),
+                    opaqueBackground.opacity(0.70),
+                    opaqueBackground.opacity(0.88),
                     opaqueBackground
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 66)
+            .frame(height: 110)
 
             opaqueBackground
         }
@@ -166,28 +170,28 @@ private struct SettingsControls: View {
     @ObservedObject var settings: AppSettings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 0) {
-                VStack(alignment: .leading, spacing: 15) {
-                    HStack {
-                        SettingsSectionTitle(
-                            title: "Оформление",
-                            symbol: "circle.lefthalf.filled"
-                        )
-                        Spacer()
-                        Button {
-                            settings.resetIndicatorColors()
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                        }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .help("Сбросить цвета")
-                        .accessibilityLabel("Сбросить цвета")
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    SettingsSectionTitle(
+                        title: "Оформление",
+                        symbol: "circle.lefthalf.filled"
+                    )
+                    Spacer()
+                    Button {
+                        settings.resetIndicatorColors()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
                     }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help("Сбросить цвета")
+                    .accessibilityLabel("Сбросить цвета")
+                }
 
+                SettingsGroup {
                     DiscreteSliderRow(
-                        title: "Размер индикаторов",
+                        title: "Размер",
                         value: Binding(
                             get: { settings.indicatorSizeScale },
                             set: { settings.setIndicatorSizeScale($0) }
@@ -196,51 +200,46 @@ private struct SettingsControls: View {
                     )
 
                     DiscreteSliderRow(
-                        title: "Расстояние между индикаторами",
+                        title: "Расстояние",
                         value: Binding(
                             get: { settings.indicatorSpacingScale },
                             set: { settings.setIndicatorSpacingScale($0) }
                         ),
                         steps: AppSettings.indicatorSpacingSteps
                     )
-                }
-                .frame(maxWidth: .infinity)
 
-                Divider()
-                    .frame(height: 158)
-                    .padding(.horizontal, 24)
-
-                VStack(alignment: .leading, spacing: 0) {
-                    SettingsSectionTitle(
-                        title: "Поведение",
-                        symbol: "switch.2"
+                    SettingsToggleRow(
+                        title: "Обводка",
+                        isOn: $settings.showsIndicatorOutline
                     )
-                    .padding(.bottom, 5)
+                }
+            }
 
-                    CompactToggleRow(
-                        title: "Анимация индикатора",
-                        symbol: "sparkles",
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsSectionTitle(
+                    title: "Поведение",
+                    symbol: "switch.2"
+                )
+
+                SettingsGroup {
+                    SettingsToggleRow(
+                        title: "Анимация",
                         isOn: $settings.animateIndicator
                     )
 
-                    AnimationStyleSelector(
+                    AnimationStyleRow(
                         selection: $settings.indicatorAnimationStyle,
                         isEnabled: settings.animateIndicator
                     )
-                    .padding(.bottom, 10)
 
-                    Divider().opacity(0.55)
-
-                    CompactToggleRow(
+                    SettingsToggleRow(
                         title: "Запускать при входе",
-                        symbol: "person.crop.circle.badge.checkmark",
                         isOn: Binding(
                             get: { settings.launchAtLoginState == .on },
                             set: { _ in settings.toggleLaunchAtLogin() }
                         )
                     )
                 }
-                .frame(maxWidth: .infinity)
             }
 
             if let message = settings.message {
@@ -250,9 +249,52 @@ private struct SettingsControls: View {
                     .lineLimit(2)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 22)
-        .padding(.bottom, 20)
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+        .padding(.bottom, 16)
+    }
+}
+
+private enum SettingsGridMetrics {
+    static let labelWidth: CGFloat = 128
+    static let columnSpacing: CGFloat = 16
+    static let horizontalInset: CGFloat = 16
+}
+
+private struct SettingsGroup<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content
+        }
+        .padding(.horizontal, SettingsGridMetrics.horizontalInset)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.035))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.075), lineWidth: 0.5)
+        }
+    }
+}
+
+private struct SettingsRowLabel: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.callout)
+            .foregroundStyle(.primary)
+            .frame(
+                width: SettingsGridMetrics.labelWidth,
+                alignment: .leading
+            )
     }
 }
 
@@ -273,24 +315,37 @@ private struct SettingsSectionTitle: View {
     }
 }
 
-private struct CompactToggleRow: View {
+private struct SettingsToggleRow: View {
     let title: String
-    let symbol: String
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            Text(title)
-            Spacer(minLength: 8)
+        HStack(spacing: SettingsGridMetrics.columnSpacing) {
+            SettingsRowLabel(title: title)
+            Spacer(minLength: 0)
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
         }
-        .padding(.vertical, 12)
+        .frame(height: 42)
+    }
+}
+
+private struct AnimationStyleRow: View {
+    @Binding var selection: IndicatorAnimationStyle
+    let isEnabled: Bool
+
+    var body: some View {
+        HStack(spacing: SettingsGridMetrics.columnSpacing) {
+            SettingsRowLabel(title: "Стиль")
+            AnimationStyleSelector(
+                selection: $selection,
+                isEnabled: isEnabled
+            )
+            .frame(maxWidth: .infinity)
+        }
+        .frame(height: 48)
     }
 }
 
@@ -377,6 +432,7 @@ private struct AnimationStyleSelector: View {
 private struct DemoVisualConfiguration: Equatable {
     let sizeScale: Double
     let spacingScale: Double
+    let showsThinOutline: Bool
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
 }
@@ -387,6 +443,7 @@ private struct InteractiveDemoZone: View {
     let colors: [NSColor]
     let sizeScale: Double
     let spacingScale: Double
+    let showsThinOutline: Bool
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
     let setColor: (NSColor, Int) -> Void
@@ -425,6 +482,7 @@ private struct InteractiveDemoZone: View {
                         hoveredIndex: hoveredIndex,
                         sizeScale: demoScale,
                         spacingScale: CGFloat(configuration.spacingScale),
+                        showsThinOutline: configuration.showsThinOutline,
                         animationsEnabled: configuration.animationsEnabled,
                         animationStyle: configuration.animationStyle,
                         reduceMotion: reduceMotion
@@ -614,6 +672,7 @@ private struct InteractiveDemoZone: View {
         DemoVisualConfiguration(
             sizeScale: sizeScale,
             spacingScale: spacingScale,
+            showsThinOutline: showsThinOutline,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle
         )
@@ -1254,15 +1313,17 @@ private struct DiscreteSliderRow: View {
     let steps: [Double]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.callout)
+        HStack(spacing: SettingsGridMetrics.columnSpacing) {
+            SettingsRowLabel(title: title)
             DiscreteSlider(
                 value: $value,
                 steps: steps,
                 accessibilityLabel: title
             )
             .frame(height: 25)
+            .frame(maxWidth: .infinity)
         }
+        .frame(height: 48)
     }
 }
 

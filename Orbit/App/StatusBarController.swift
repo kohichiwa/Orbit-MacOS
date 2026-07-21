@@ -163,6 +163,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 switch change {
                 case .colors:
                     refreshArtworkForSettings()
+                case .outline:
+                    refreshArtworkForSettings()
                 case .layout:
                     applyPendingVisualSettings()
                 case .animationEnabled(let enabled):
@@ -263,6 +265,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             indicatorColors: settings.indicatorColors(
                 for: renderedDesktopColorSlotCount
             ),
+            showsThinOutline: settings.showsIndicatorOutline,
             sizeScale: indicatorSizeScale,
             spacingScale: indicatorSpacingScale,
             horizontalOverflowPadding: StatusItemArtwork.horizontalPadding(

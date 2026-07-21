@@ -18,6 +18,7 @@ nonisolated final class StatusIndicatorImageRenderer {
     private let bitmap: NSBitmapImageRep
     private let indicatorKinds: [SpaceIndicatorKind]
     private let indicatorColors: [NSColor]
+    private let showsThinOutline: Bool
     private let sizeScale: CGFloat
     private let itemWidth: CGFloat
     private let horizontalPadding: CGFloat
@@ -29,12 +30,14 @@ nonisolated final class StatusIndicatorImageRenderer {
         count: Int,
         indicatorKinds: [SpaceIndicatorKind]? = nil,
         indicatorColors: [NSColor] = [.controlAccentColor],
+        showsThinOutline: Bool = false,
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1,
         imageHeight: CGFloat = StatusItemArtwork.imageHeight,
         horizontalOverflowPadding: CGFloat = 0
     ) {
         self.count = max(count, 1)
+        self.showsThinOutline = showsThinOutline
         self.sizeScale = sizeScale
         itemWidth = StatusItemArtwork.itemWidth(
             sizeScale: sizeScale,
@@ -232,18 +235,20 @@ nonisolated final class StatusIndicatorImageRenderer {
         let color = indicatorColors[index]
 
         if indicatorKinds[index].isFullscreen {
-            drawOutline(
+            drawHollowIndicator(
                 in: rect,
-                color: color.withAlphaComponent(0.46 * opacity),
+                color: color,
+                strokeOpacity: 0.46 * opacity,
+                thinOutlineOpacity: 0.25 * opacity,
                 lineWidth: fullscreenOutlineWidth
             )
         } else {
-            color.withAlphaComponent(0.32 * opacity).setFill()
-            NSBezierPath(
-                roundedRect: rect,
-                xRadius: rect.height / 2,
-                yRadius: rect.height / 2
-            ).fill()
+            drawFilledIndicator(
+                in: rect,
+                color: color,
+                fillOpacity: 0.32 * opacity,
+                outlineOpacity: 0.25 * opacity
+            )
         }
     }
 
@@ -298,21 +303,84 @@ nonisolated final class StatusIndicatorImageRenderer {
         opacity: CGFloat = 1
     ) {
         guard opacity > 0.001 else { return }
-        let visibleColor = color.withAlphaComponent(opacity)
         if kind.isFullscreen {
-            drawOutline(
+            drawHollowIndicator(
                 in: rect,
-                color: visibleColor,
+                color: color,
+                strokeOpacity: opacity,
+                thinOutlineOpacity: 0.25 * opacity,
                 lineWidth: fullscreenOutlineWidth * 1.5
             )
         } else {
-            visibleColor.setFill()
-            NSBezierPath(
-                roundedRect: rect,
-                xRadius: rect.height / 2,
-                yRadius: rect.height / 2
-            ).fill()
+            drawFilledIndicator(
+                in: rect,
+                color: color,
+                fillOpacity: opacity,
+                outlineOpacity: 0.25 * opacity
+            )
         }
+    }
+
+    private func drawHollowIndicator(
+        in rect: NSRect,
+        color: NSColor,
+        strokeOpacity: CGFloat,
+        thinOutlineOpacity: CGFloat,
+        lineWidth: CGFloat
+    ) {
+        if showsThinOutline {
+            drawOutline(
+                in: rect,
+                color: contrastingOutlineColor(
+                    for: color,
+                    opacity: thinOutlineOpacity
+                ),
+                lineWidth: lineWidth + thinOutlineWidth
+            )
+        }
+        drawOutline(
+            in: rect,
+            color: color.withAlphaComponent(strokeOpacity),
+            lineWidth: lineWidth
+        )
+    }
+
+    private func drawFilledIndicator(
+        in rect: NSRect,
+        color: NSColor,
+        fillOpacity: CGFloat,
+        outlineOpacity: CGFloat
+    ) {
+        color.withAlphaComponent(fillOpacity).setFill()
+        NSBezierPath(
+            roundedRect: rect,
+            xRadius: rect.height / 2,
+            yRadius: rect.height / 2
+        ).fill()
+
+        guard showsThinOutline else { return }
+        drawOutline(
+            in: rect,
+            color: contrastingOutlineColor(
+                for: color,
+                opacity: outlineOpacity
+            ),
+            lineWidth: thinOutlineWidth
+        )
+    }
+
+    private func contrastingOutlineColor(
+        for color: NSColor,
+        opacity: CGFloat
+    ) -> NSColor {
+        let color = Self.fixedSRGBColor(from: color)
+        let luminance = 0.2126 * color.redComponent
+            + 0.7152 * color.greenComponent
+            + 0.0722 * color.blueComponent
+        return NSColor(
+            white: luminance > 0.58 ? 0 : 1,
+            alpha: opacity
+        )
     }
 
     private func transitionState(
@@ -447,5 +515,9 @@ nonisolated final class StatusIndicatorImageRenderer {
 
     private var fullscreenOutlineWidth: CGFloat {
         max(1.1 * sizeScale, 1)
+    }
+
+    private var thinOutlineWidth: CGFloat {
+        max(0.5 * sizeScale, 0.5)
     }
 }

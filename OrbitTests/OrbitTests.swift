@@ -638,6 +638,44 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testThinOutlineChangesDesktopAndFullscreenIndicators() throws {
+        let plainDesktop = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorColors: [.systemBlue]
+        )
+        let outlinedDesktop = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorColors: [.systemBlue],
+            showsThinOutline: true
+        )
+
+        XCTAssertNotEqual(
+            plainDesktop.image.tiffRepresentation,
+            outlinedDesktop.image.tiffRepresentation
+        )
+
+        let fullscreenKinds: [SpaceIndicatorKind] = [
+            .fullscreen(colorIndex: 0)
+        ]
+        let plainFullscreen = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorKinds: fullscreenKinds,
+            indicatorColors: [.systemBlue]
+        )
+        let outlinedFullscreen = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorKinds: fullscreenKinds,
+            indicatorColors: [.systemBlue],
+            showsThinOutline: true
+        )
+
+        XCTAssertNotEqual(
+            plainFullscreen.image.tiffRepresentation,
+            outlinedFullscreen.image.tiffRepresentation
+        )
+    }
+
+    @MainActor
     func testFullscreenIndicatorUsesMatchingInnerOutline() throws {
         let renderer = StatusIndicatorImageRenderer(
             count: 3,

@@ -22,6 +22,7 @@ enum IndicatorAnimationStyle: String, CaseIterable, Identifiable {
 enum VisualSettingsChange {
     case layout
     case colors
+    case outline
     case animationEnabled(Bool)
     case animationStyle
 }
@@ -33,13 +34,14 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         static let indicatorAnimationStyle = "indicatorAnimationStyle"
         static let indicatorSizeScale = "indicatorSizeScale"
         static let indicatorSpacingScale = "indicatorSpacingScale"
+        static let showsIndicatorOutline = "showsIndicatorOutline"
         static let indicatorColorComponents = "indicatorColorComponents"
         static let indicatorColorsComponents = "indicatorColorsComponents"
         static let desktopColorSlots = "desktopColorSlotsBySpaceIdentifier"
     }
 
     static let indicatorSizeSteps: [Double] = [
-        0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5
+        0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7
     ]
     static let indicatorSpacingSteps: [Double] = [
         1,
@@ -48,7 +50,9 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         1 + 3.0 / 12,
         1 + 4.0 / 12,
         1 + 5.0 / 12,
-        1.5
+        1.5,
+        1 + 7.0 / 12,
+        1 + 8.0 / 12
     ]
 
     let visualSettingsChanges = PassthroughSubject<VisualSettingsChange, Never>()
@@ -81,6 +85,16 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         didSet {
             defaults.set(indicatorSpacingScale, forKey: Key.indicatorSpacingScale)
             visualSettingsChanges.send(.layout)
+        }
+    }
+
+    @Published var showsIndicatorOutline: Bool {
+        didSet {
+            defaults.set(
+                showsIndicatorOutline,
+                forKey: Key.showsIndicatorOutline
+            )
+            visualSettingsChanges.send(.outline)
         }
     }
 
@@ -118,6 +132,9 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
             defaults.object(forKey: Key.indicatorSpacingScale) == nil
                 ? 1
                 : defaults.double(forKey: Key.indicatorSpacingScale)
+        )
+        showsIndicatorOutline = defaults.bool(
+            forKey: Key.showsIndicatorOutline
         )
         indicatorColors = Self.storedIndicatorColors(in: defaults)
         if indicatorColors.isEmpty,
