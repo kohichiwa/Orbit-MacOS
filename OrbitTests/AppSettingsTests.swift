@@ -1,0 +1,266 @@
+import AppKit
+import Combine
+import XCTest
+
+@testable import Orbit
+
+@MainActor
+final class AppSettingsTests: XCTestCase {
+    func testSettingsWindowIsFixedAndTransparent() {
+        let suiteName = "OrbitTests.settings.window.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = AppSettings(defaults: defaults)
+        let viewModel = SpaceViewModel(
+            colorAssignments: settings,
+            previewSnapshot: SpaceSnapshot(
+                identifiers: [11, 12, 13],
+                activeIndex: 1
+            )
+        )
+        let controller = SettingsWindowController(
+            settings: settings,
+            viewModel: viewModel
+        )
+        guard let window = controller.window else {
+            return XCTFail("Could not create settings window")
+        }
+        XCTAssertFalse(window.isOpaque)
+        XCTAssertEqual(window.backgroundColor.alphaComponent, 0, accuracy: 0.001)
+        XCTAssertEqual(window.minSize, window.maxSize)
+        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(window.titlebarAppearsTransparent)
+        XCTAssertFalse(window.hidesOnDeactivate)
+        XCTAssertEqual(window.level, .floating)
+        XCTAssertTrue(window.collectionBehavior.contains(.moveToActiveSpace))
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenAuxiliary))
+
+        guard
+            let contentView = window.contentView,
+            let visualEffect = visualEffectView(in: contentView)
+        else {
+            return XCTFail("Settings window must contain a visual effect view")
+        }
+        XCTAssertEqual(visualEffect.blendingMode, .behindWindow)
+        XCTAssertEqual(visualEffect.material, .underWindowBackground)
+        XCTAssertEqual(visualEffect.alphaValue, 1)
+    }
+
+    func testSizeAndSpacingUseIndependentDiscreteSteps() {
+        XCTAssertEqual(AppSettings.indicatorSizeSteps.first, 0.9)
+        XCTAssertEqual(AppSettings.indicatorSpacingSteps.first, 1)
+        XCTAssertEqual(
+            AppSettings.indicatorSpacingSteps.count,
+            AppSettings.indicatorSizeSteps.count
+        )
+        XCTAssertEqual(AppSettings.normalizedIndicatorSize(0.94), 0.9)
+        XCTAssertEqual(AppSettings.normalizedIndicatorSize(0.96), 1)
+        XCTAssertEqual(AppSettings.normalizedIndicatorSpacing(0.9), 1)
+        XCTAssertEqual(AppSettings.normalizedIndicatorSpacing(99), 1.5)
+    }
+
+    func testAnimationStyleDefaultsToSeamlessAndPersists() {
+        withSettings { settings, defaults in
+            XCTAssertEqual(settings.indicatorAnimationStyle, .seamless)
+
+            settings.indicatorAnimationStyle = .classic
+
+            let restored = AppSettings(defaults: defaults)
+            XCTAssertEqual(restored.indicatorAnimationStyle, .classic)
+            XCTAssertEqual(IndicatorAnimationStyle.allCases.count, 2)
+        }
+    }
+
+    func testMotionPresetsHonorReduceMotionAndAnimationSetting() {
+        XCTAssertFalse(OrbitMotion.allowsMotion(
+            userEnabled: true,
+            reduceMotion: true
+        ))
+        XCTAssertFalse(OrbitMotion.allowsMotion(
+            userEnabled: false,
+            reduceMotion: false
+        ))
+        XCTAssertTrue(OrbitMotion.allowsMotion(
+            userEnabled: true,
+            reduceMotion: false
+        ))
+        XCTAssertNil(OrbitMotion.indicatorChange(
+            style: .seamless,
+            enabled: true,
+            reduceMotion: true
+        ))
+        XCTAssertNil(OrbitMotion.hover(
+            isHovered: true,
+            enabled: false,
+            reduceMotion: false
+        ))
+        XCTAssertNil(OrbitMotion.palette(
+            enabled: true,
+            reduceMotion: true
+        ))
+        XCTAssertNil(OrbitMotion.colorChange(
+            enabled: false,
+            reduceMotion: false
+        ))
+        XCTAssertNotNil(OrbitMotion.indicatorChange(
+            style: .classic,
+            enabled: true,
+            reduceMotion: false
+        ))
+        XCTAssertLessThanOrEqual(
+            OrbitMotion.seamlessDuration,
+            OrbitMotion.maximumFeedbackDuration
+        )
+        XCTAssertLessThanOrEqual(
+            OrbitMotion.hoverExitDuration,
+            OrbitMotion.maximumFeedbackDuration
+        )
+    }
+
+    func testVisualSettingsChangesPublishSynchronouslyAfterMutation() {
+        withSettings { settings, _ in
+            var snapshots: [(
+                change: VisualSettingsChange,
+                size: Double,
+                spacing: Double,
+                animationsEnabled: Bool,
+                style: IndicatorAnimationStyle,
+                colorCount: Int
+            )] = []
+            let cancellable = settings.visualSettingsChanges.sink { change in
+                snapshots.append((
+                    change,
+                    settings.indicatorSizeScale,
+                    settings.indicatorSpacingScale,
+                    settings.animateIndicator,
+                    settings.indicatorAnimationStyle,
+                    settings.indicatorColors.count
+                ))
+            }
+
+            settings.setIndicatorSizeScale(1.2)
+            settings.setIndicatorSpacingScale(1.25)
+            settings.setIndicatorColor(.systemRed, at: 0)
+            settings.animateIndicator = false
+            settings.indicatorAnimationStyle = .classic
+
+            XCTAssertEqual(snapshots.count, 5)
+            XCTAssertEqual(snapshots[0].size, 1.2)
+            XCTAssertEqual(snapshots[1].spacing, 1.25)
+            XCTAssertEqual(snapshots[2].colorCount, 1)
+            XCTAssertFalse(snapshots[3].animationsEnabled)
+            XCTAssertEqual(snapshots[4].style, .classic)
+            withExtendedLifetime(cancellable) {}
+        }
+    }
+
+    func testColorsPersistAndReset() {
+        withSettings { settings, defaults in
+            settings.setIndicatorColor(.systemRed, at: 1)
+
+            let restored = AppSettings(defaults: defaults)
+            XCTAssertEqual(restored.indicatorColors.count, 2)
+            assertSameRGB(restored.indicatorColors[1], .systemRed)
+
+            restored.resetIndicatorColors()
+            XCTAssertTrue(restored.indicatorColors.isEmpty)
+        }
+    }
+
+    func testColorSlotsFollowSpaceIdentifiersAfterReordering() {
+        withSettings { settings, defaults in
+            XCTAssertEqual(
+                settings.colorSlots(for: [101, 202, 303]),
+                [101: 0, 202: 1, 303: 2]
+            )
+            XCTAssertEqual(
+                settings.colorSlots(for: [303, 101, 202]),
+                [101: 0, 202: 1, 303: 2]
+            )
+
+            let restored = AppSettings(defaults: defaults)
+            XCTAssertEqual(
+                restored.colorSlots(for: [202, 303, 101]),
+                [101: 0, 202: 1, 303: 2]
+            )
+        }
+    }
+
+    func testDeletedSpaceColorIsNotReusedByNewSpace() {
+        withSettings { settings, _ in
+            _ = settings.colorSlots(for: [101, 202, 303])
+            settings.setIndicatorColor(.systemRed, at: 0)
+            settings.setIndicatorColor(.systemGreen, at: 1)
+            settings.setIndicatorColor(.systemBlue, at: 2)
+
+            XCTAssertEqual(
+                settings.colorSlots(for: [101, 303]),
+                [101: 0, 303: 1]
+            )
+            XCTAssertEqual(settings.indicatorColors.count, 2)
+            assertSameRGB(settings.indicatorColors[1], .systemBlue)
+
+            XCTAssertEqual(
+                settings.colorSlots(for: [101, 303, 404]),
+                [101: 0, 303: 1, 404: 2]
+            )
+            assertSameRGB(settings.indicatorColors[2], .controlAccentColor)
+        }
+    }
+
+    private func withSettings(
+        _ body: (AppSettings, UserDefaults) -> Void
+    ) {
+        let suiteName = "OrbitTests.settings.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        body(AppSettings(defaults: defaults), defaults)
+    }
+
+    private func visualEffectView(in view: NSView) -> NSVisualEffectView? {
+        if let visualEffect = view as? NSVisualEffectView {
+            return visualEffect
+        }
+        return view.subviews.lazy.compactMap(visualEffectView).first
+    }
+
+    private func assertSameRGB(
+        _ actual: NSColor,
+        _ expected: NSColor,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard
+            let actual = actual.usingColorSpace(.sRGB),
+            let expected = expected.usingColorSpace(.sRGB)
+        else {
+            return XCTFail("Could not convert colors", file: file, line: line)
+        }
+        XCTAssertEqual(
+            actual.redComponent,
+            expected.redComponent,
+            accuracy: 0.001,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            actual.greenComponent,
+            expected.greenComponent,
+            accuracy: 0.001,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            actual.blueComponent,
+            expected.blueComponent,
+            accuracy: 0.001,
+            file: file,
+            line: line
+        )
+    }
+}

@@ -28,6 +28,9 @@ final class SystemSpacesReader: SpacesReading {
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Orbit", category: "Spaces")
     private var observer: NSObjectProtocol?
     private var changeHandler: (() -> Void)?
+    private var structureTimer: Timer?
+    private var structureCheckTask: Task<Void, Never>?
+    private var lastObservedIndicators: [SpaceIndicatorEntry]?
 
     nonisolated deinit {}
 
@@ -46,6 +49,19 @@ final class SystemSpacesReader: SpacesReading {
                 self?.changeHandler?()
             }
         }
+
+        // Active-space notifications do not cover every Mission Control
+        // structure change. This lightweight WindowServer check keeps
+        // full-screen indicators in sync when an app enters or exits full screen.
+        let structureTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.checkSpaceStructure()
+            }
+        }
+        structureTimer.tolerance = 0.1
+        RunLoop.main.add(structureTimer, forMode: .common)
+        self.structureTimer = structureTimer
+        checkSpaceStructure()
     }
 
     func stop() {
@@ -53,7 +69,33 @@ final class SystemSpacesReader: SpacesReading {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         observer = nil
+        structureTimer?.invalidate()
+        structureTimer = nil
+        structureCheckTask?.cancel()
+        structureCheckTask = nil
+        lastObservedIndicators = nil
         changeHandler = nil
+    }
+
+    private func checkSpaceStructure() {
+        guard structureCheckTask == nil else { return }
+        structureCheckTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.structureCheckTask = nil }
+            guard
+                !Task.isCancelled,
+                let snapshot = await self.read(),
+                !Task.isCancelled
+            else { return }
+
+            let currentIndicators = snapshot.indicators
+            defer { self.lastObservedIndicators = currentIndicators }
+            guard
+                let previousIndicators = self.lastObservedIndicators,
+                previousIndicators != currentIndicators
+            else { return }
+            self.changeHandler?()
+        }
     }
 
     func read() async -> SpaceSnapshot? {
@@ -131,13 +173,22 @@ final class SystemSpacesReader: SpacesReading {
         }
         let orderedIdentifiers = entries.map(\.identifier)
         let desktopIdentifiers = entries.filter(\.isDesktop).map(\.identifier)
+        var desktopColorIndex = 0
+        let indicatorKinds: [SpaceIndicatorKind] = entries.map { entry in
+            guard entry.isDesktop else {
+                return .fullscreen(colorIndex: max(desktopColorIndex - 1, 0))
+            }
+            defer { desktopColorIndex += 1 }
+            return .desktop(colorIndex: desktopColorIndex)
+        }
         guard !orderedIdentifiers.isEmpty, !desktopIdentifiers.isEmpty else { return nil }
 
         let activeIdentifier = (monitor["Current Space"] as? [String: Any]).flatMap(spaceIdentifier)
         return SpaceSnapshot(
             orderedIdentifiers: orderedIdentifiers,
             desktopIdentifiers: desktopIdentifiers,
-            activeIdentifier: activeIdentifier
+            activeIdentifier: activeIdentifier,
+            indicatorKinds: indicatorKinds
         )
     }
 

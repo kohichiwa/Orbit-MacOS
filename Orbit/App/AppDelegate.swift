@@ -2,13 +2,26 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let viewModel = SpaceViewModel()
+    let viewModel: SpaceViewModel
+    let settings: AppSettings
     private var statusBarController: StatusBarController?
+
+    override init() {
+        let settings = AppSettings()
+        self.settings = settings
+        viewModel = SpaceViewModel(colorAssignments: settings)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         terminateOlderOrbitInstances()
         NSApp.setActivationPolicy(.accessory)
-        statusBarController = StatusBarController(viewModel: viewModel)
+        let statusBarController = StatusBarController(
+            viewModel: viewModel,
+            settings: settings
+        )
+        self.statusBarController = statusBarController
+        configureMainMenu(target: statusBarController)
         viewModel.start()
     }
 
@@ -18,6 +31,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         Task { await viewModel.refresh() }
+    }
+
+    private func configureMainMenu(target: StatusBarController) {
+        let mainMenu = NSMenu()
+        let applicationItem = NSMenuItem()
+        let applicationMenu = NSMenu()
+
+        let settingsItem = NSMenuItem(
+            title: "Настройки…",
+            action: #selector(StatusBarController.showSettings),
+            keyEquivalent: ","
+        )
+        settingsItem.keyEquivalentModifierMask = [.command]
+        settingsItem.target = target
+        applicationMenu.addItem(settingsItem)
+
+        applicationItem.submenu = applicationMenu
+        mainMenu.addItem(applicationItem)
+        NSApp.mainMenu = mainMenu
     }
 
     private func terminateOlderOrbitInstances() {

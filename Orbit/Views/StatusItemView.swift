@@ -54,9 +54,11 @@ struct SpaceDotsView: View {
                 .frame(width: 14, height: 20)
                 .offset(x: CGFloat(activeIndex) * 14)
                 .animation(
-                    reduceMotion
-                        ? .easeOut(duration: 0.08)
-                        : .spring(response: 0.25, dampingFraction: 0.82, blendDuration: 0.04),
+                    OrbitMotion.indicatorChange(
+                        style: .seamless,
+                        enabled: true,
+                        reduceMotion: reduceMotion
+                    ),
                     value: activeIndex
                 )
                 .allowsHitTesting(false)
@@ -83,7 +85,9 @@ struct SpaceDotsView: View {
             return
         }
 
-        withAnimation(.easeOut(duration: 0.075)) {
+        withAnimation(
+            .smooth(duration: 0.08, extraBounce: 0)
+        ) {
             liquidPhase = .stretch
         }
 
@@ -93,7 +97,9 @@ struct SpaceDotsView: View {
             } catch {
                 return
             }
-            withAnimation(.spring(response: 0.14, dampingFraction: 0.68)) {
+            withAnimation(
+                .snappy(duration: 0.14, extraBounce: 0)
+            ) {
                 liquidPhase = .squash
             }
             do {
@@ -101,7 +107,9 @@ struct SpaceDotsView: View {
             } catch {
                 return
             }
-            withAnimation(.spring(response: 0.16, dampingFraction: 0.82)) {
+            withAnimation(
+                .smooth(duration: 0.16, extraBounce: 0)
+            ) {
                 liquidPhase = .rest
             }
         }
@@ -183,7 +191,7 @@ private struct SpaceDotButton: View {
         .accessibilityLabel("Рабочий стол \(index + 1)")
         .accessibilityValue(isActive ? "Выбран" : "Не выбран")
         .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.1),
+            OrbitMotion.press(reduceMotion: reduceMotion),
             value: isActive
         )
     }

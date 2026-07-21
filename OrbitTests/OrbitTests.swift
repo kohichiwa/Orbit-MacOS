@@ -34,7 +34,7 @@ final class SystemSpacesReaderTests: XCTestCase {
         XCTAssertEqual(snapshot?.activeIndex, 1)
     }
 
-    func testKeepsFullscreenSpacesForNavigationButNotForDots() {
+    func testKeepsFullscreenSpacesInIndicatorOrder() {
         let configuration: [String: Any] = [
             "Management Data": [
                 "Monitors": [[
@@ -52,7 +52,16 @@ final class SystemSpacesReaderTests: XCTestCase {
         let snapshot = SystemSpacesReader.decode(configuration: configuration)
         XCTAssertEqual(snapshot?.orderedIdentifiers, [10, 20, 30])
         XCTAssertEqual(snapshot?.desktopIdentifiers, [10, 30])
-        XCTAssertEqual(snapshot?.activeIndex, 1)
+        XCTAssertEqual(
+            snapshot?.indicatorKinds,
+            [
+                .desktop(colorIndex: 0),
+                .fullscreen(colorIndex: 0),
+                .desktop(colorIndex: 1)
+            ]
+        )
+        XCTAssertEqual(snapshot?.count, 3)
+        XCTAssertEqual(snapshot?.activeIndex, 2)
         XCTAssertEqual(snapshot?.direction(toward: 10), .previous)
     }
 
@@ -113,12 +122,44 @@ final class SpaceViewModelTests: XCTestCase {
             previewSnapshot: initial
         )
 
-        await viewModel.select(1)
+        await viewModel.select(2)
 
-        XCTAssertEqual(viewModel.spaceCount, 2)
-        XCTAssertEqual(viewModel.activeIndex, 1)
+        XCTAssertEqual(viewModel.spaceCount, 3)
+        XCTAssertEqual(viewModel.activeIndex, 2)
         XCTAssertEqual(controller.moves, [.next, .next])
         XCTAssertNil(viewModel.message)
+    }
+
+    @MainActor
+    func testNewFullscreenSpaceRetainsItsSourceDesktopColor() async {
+        let initial = SpaceSnapshot(identifiers: [10, 20], activeIndex: 1)
+        let fullscreen = SpaceSnapshot(
+            orderedIdentifiers: [10, 30, 20],
+            desktopIdentifiers: [10, 20],
+            activeIdentifier: 30,
+            indicatorKinds: [
+                .desktop(colorIndex: 0),
+                .fullscreen(colorIndex: 0),
+                .desktop(colorIndex: 1)
+            ]
+        )
+        let viewModel = SpaceViewModel(
+            reader: FakeSpacesReader(snapshots: [fullscreen]),
+            controller: FakeSpaceController(canPostEvents: true),
+            previewSnapshot: initial
+        )
+
+        await viewModel.refresh()
+
+        XCTAssertEqual(
+            viewModel.indicatorKinds,
+            [
+                .desktop(colorIndex: 0),
+                .fullscreen(colorIndex: 1),
+                .desktop(colorIndex: 1)
+            ]
+        )
+        XCTAssertEqual(viewModel.activeIndex, 1)
     }
 
     @MainActor
@@ -259,6 +300,180 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPillMotionClearlyMorphsThroughDotAndLiquidOvershoot() {
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+        let motion = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: 4
+        )
+
+        let collapsed = motion.frame(
+            at: 4 + motion.duration * 0.18
+        )
+        XCTAssertEqual(collapsed.width, collapsed.height, accuracy: 0.001)
+        XCTAssertLessThan(collapsed.width, StatusItemArtwork.dotDiameter * 1.1)
+
+        let travelling = motion.frame(
+            at: 4 + motion.duration * 0.54
+        )
+        XCTAssertGreaterThan(travelling.width, travelling.height)
+        XCTAssertGreaterThan(travelling.x, source)
+        XCTAssertLessThan(travelling.x, target)
+
+        let arriving = motion.frame(
+            at: 4 + motion.duration * 0.82
+        )
+        XCTAssertGreaterThan(arriving.x, source)
+        XCTAssertLessThan(arriving.x, target)
+        XCTAssertGreaterThan(arriving.width, 12)
+        XCTAssertGreaterThan(arriving.height, 7)
+
+        let settled = motion.frame(at: 4 + motion.duration)
+        XCTAssertTrue(settled.isComplete)
+        XCTAssertEqual(settled, .resting(at: target))
+    }
+
+    @MainActor
+    func testPillMotionHasNoInternalPositionPlateaus() {
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 3)
+        let motion = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: 8
+        )
+        let positions = (1..<20).map { sample in
+            motion.frame(
+                at: 8 + motion.duration * Double(sample) / 20
+            ).x
+        }
+
+        for (previous, next) in zip(positions, positions.dropFirst()) {
+            XCTAssertGreaterThan(next, previous)
+        }
+    }
+
+    @MainActor
+    func testClassicPillMotionUsesBriefSnappyProfile() {
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+        let motion = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: 12,
+            style: .classic
+        )
+
+        XCTAssertEqual(
+            motion.duration,
+            OrbitMotion.classicDuration,
+            accuracy: 0.0001
+        )
+        let stretched = motion.frame(
+            at: 12 + motion.duration * 0.34
+        )
+        XCTAssertEqual(stretched.width, 16.6, accuracy: 0.001)
+        XCTAssertEqual(stretched.height, 6.15, accuracy: 0.001)
+        XCTAssertGreaterThan(stretched.x, source)
+        XCTAssertLessThan(stretched.x, target)
+
+        let settled = motion.frame(at: 12 + motion.duration)
+        XCTAssertEqual(settled, .resting(at: target))
+    }
+
+    @MainActor
+    func testPillFeedbackMotionAlwaysStaysBrief() {
+        let motion = StatusPillMotion(
+            fromX: StatusItemArtwork.centerX(for: 0),
+            toX: StatusItemArtwork.centerX(for: 99),
+            startTime: 0,
+            style: .seamless
+        )
+
+        XCTAssertLessThanOrEqual(
+            motion.duration,
+            OrbitMotion.maximumFeedbackDuration
+        )
+    }
+
+    @MainActor
+    func testArtworkRefreshAppliesChangesOnlyWhileFullyHidden() {
+        let motion = StatusArtworkRefreshMotion(
+            startTime: 20,
+            initialPresentation: .identity
+        )
+
+        let start = motion.frame(at: 20)
+        XCTAssertEqual(start.presentation, .identity)
+        XCTAssertFalse(start.shouldApplySettings)
+
+        let hidden = motion.frame(
+            at: 20 + IndicatorRefreshTiming.disappearDuration
+        )
+        XCTAssertEqual(hidden.presentation.opacity, 0, accuracy: 0.001)
+        XCTAssertLessThan(hidden.presentation.scaleX, 1)
+        XCTAssertLessThan(hidden.presentation.scaleY, hidden.presentation.scaleX)
+        XCTAssertTrue(hidden.shouldApplySettings)
+
+        let returning = motion.frame(
+            at: 20 + IndicatorRefreshTiming.disappearDuration
+                + IndicatorRefreshTiming.appearDuration * 0.75
+        )
+        XCTAssertGreaterThan(returning.presentation.opacity, 0.8)
+        XCTAssertGreaterThan(returning.presentation.scaleX, 0.95)
+
+        let finished = motion.frame(
+            at: 20 + IndicatorRefreshTiming.totalDuration
+        )
+        XCTAssertEqual(finished.presentation, .identity)
+        XCTAssertTrue(finished.shouldApplySettings)
+        XCTAssertTrue(finished.isComplete)
+    }
+
+    @MainActor
+    func testHoverMotionUsesLiquidEntryAndThirtyHundredthsExit() {
+        let resting = CGSize(width: 1, height: 1)
+        let entry = StatusHoverMotion(
+            index: 1,
+            fromScale: resting,
+            isHovered: true,
+            isActive: false,
+            startTime: 10
+        )
+        XCTAssertEqual(entry.duration, 0.22, accuracy: 0.001)
+        XCTAssertEqual(entry.targetScale.width, 11.75 / 4.5, accuracy: 0.001)
+        XCTAssertEqual(entry.targetScale.height, 7.75 / 4.5, accuracy: 0.001)
+
+        let peak = entry.frame(at: 10 + entry.duration * entry.peakTime)
+        XCTAssertGreaterThan(peak.scale.width, entry.targetScale.width)
+        XCTAssertLessThan(peak.scale.height, entry.targetScale.height)
+
+        let exit = StatusHoverMotion(
+            index: 1,
+            fromScale: entry.targetScale,
+            isHovered: false,
+            isActive: false,
+            startTime: 20
+        )
+        XCTAssertEqual(exit.duration, 0.30, accuracy: 0.001)
+        let finished = exit.frame(at: 20 + exit.duration)
+        XCTAssertTrue(finished.isComplete)
+        XCTAssertEqual(finished.scale, resting)
+
+        let activeEntry = StatusHoverMotion(
+            index: 0,
+            fromScale: resting,
+            isHovered: true,
+            isActive: true,
+            startTime: 30
+        )
+        XCTAssertEqual(activeEntry.targetScale.width, 1.38, accuracy: 0.001)
+        XCTAssertEqual(activeEntry.targetScale.height, 1.25, accuracy: 0.001)
+    }
+
+    @MainActor
     func testAnimatedArtworkKeepsOneAppearanceIndependentImageInstance() {
         let renderer = StatusIndicatorImageRenderer(count: 6)
         let installedImage = renderer.image
@@ -299,7 +514,192 @@ final class SpaceViewModelTests: XCTestCase {
         XCTAssertEqual(firstPillBounds.height, 14, accuracy: 3)
     }
 
-    private func opaquePixelBounds(in bitmap: NSBitmapImageRep) -> NSRect? {
+    @MainActor
+    func testHoverMorphEnlargesTheIndicatorItself() throws {
+        let renderer = StatusIndicatorImageRenderer(count: 1)
+        guard
+            let restingData = renderer.image.tiffRepresentation,
+            let restingBitmap = NSBitmapImageRep(data: restingData),
+            let restingBounds = opaquePixelBounds(
+                in: restingBitmap,
+                minimumAlpha: 0.1
+            )
+        else {
+            return XCTFail("Could not inspect resting indicator")
+        }
+
+        let hover = StatusHoverMotion(
+            index: 0,
+            fromScale: CGSize(width: 1, height: 1),
+            isHovered: true,
+            isActive: false,
+            startTime: 0
+        )
+        renderer.update(
+            pill: nil,
+            hoverScales: [0: hover.targetScale]
+        )
+
+        guard
+            let hoveredData = renderer.image.tiffRepresentation,
+            let hoveredBitmap = NSBitmapImageRep(data: hoveredData),
+            let hoveredBounds = opaquePixelBounds(
+                in: hoveredBitmap,
+                minimumAlpha: 0.1
+            )
+        else {
+            return XCTFail("Could not inspect hovered indicator")
+        }
+
+        XCTAssertGreaterThan(hoveredBounds.width, restingBounds.width * 2)
+        XCTAssertGreaterThan(hoveredBounds.height, restingBounds.height)
+        XCTAssertEqual(renderer.hoverScales[0], hover.targetScale)
+    }
+
+    @MainActor
+    func testPreviewPaddingContainsEveryEdgeTransitionFrame() throws {
+        let count = 6
+        let sizeScale: CGFloat = 3
+        let spacingScale: CGFloat = 1
+        let overflowPadding = SyncedIndicatorArtworkView
+            .horizontalOverflowPadding(
+                for: sizeScale,
+                spacingScale: spacingScale
+            )
+        let renderer = StatusIndicatorImageRenderer(
+            count: count,
+            sizeScale: sizeScale,
+            spacingScale: spacingScale,
+            imageHeight: 45,
+            horizontalOverflowPadding: overflowPadding
+        )
+        let inactiveHover = StatusHoverMotion(
+            index: count - 1,
+            fromScale: CGSize(width: 1, height: 1),
+            isHovered: true,
+            isActive: false,
+            startTime: 0
+        )
+
+        for (sourceIndex, targetIndex) in [(0, count - 1), (count - 1, 0)] {
+            let activeHover = StatusHoverMotion(
+                index: targetIndex,
+                fromScale: inactiveHover.targetScale,
+                isHovered: true,
+                isActive: true,
+                startTime: 0
+            )
+            let motion = StatusPillMotion(
+                fromX: StatusItemArtwork.centerX(
+                    for: sourceIndex,
+                    sizeScale: sizeScale,
+                    spacingScale: spacingScale
+                ),
+                toX: StatusItemArtwork.centerX(
+                    for: targetIndex,
+                    sizeScale: sizeScale,
+                    spacingScale: spacingScale
+                ),
+                startTime: 0,
+                sizeScale: sizeScale,
+                itemWidth: StatusItemArtwork.itemWidth(
+                    sizeScale: sizeScale,
+                    spacingScale: spacingScale
+                ),
+                style: .classic
+            )
+
+            for step in 0...120 {
+                let timestamp = motion.duration * Double(step) / 120
+                renderer.update(
+                    pill: motion.frame(at: timestamp),
+                    activeIndex: targetIndex,
+                    hoverScales: [
+                        targetIndex: activeHover.frame(at: timestamp).scale
+                    ]
+                )
+                guard
+                    let data = renderer.image.tiffRepresentation,
+                    let bitmap = NSBitmapImageRep(data: data),
+                    let bounds = opaquePixelBounds(
+                        in: bitmap,
+                        minimumAlpha: 0.01
+                    )
+                else {
+                    return XCTFail("Could not inspect transition frame")
+                }
+                XCTAssertGreaterThan(bounds.minX, 0)
+                XCTAssertLessThan(
+                    bounds.maxX,
+                    CGFloat(bitmap.pixelsWide)
+                )
+            }
+        }
+    }
+
+    @MainActor
+    func testFullscreenIndicatorUsesMatchingInnerOutline() throws {
+        let renderer = StatusIndicatorImageRenderer(
+            count: 3,
+            indicatorKinds: [
+                .desktop(colorIndex: 0),
+                .fullscreen(colorIndex: 0),
+                .desktop(colorIndex: 1)
+            ],
+            indicatorColors: [.systemRed, .systemBlue]
+        )
+        renderer.update(pill: nil)
+
+        guard
+            let data = renderer.image.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: data)
+        else {
+            return XCTFail("Could not inspect full-screen indicator artwork")
+        }
+
+        let centerX = Int(
+            (StatusItemArtwork.itemWidth * 1.5) * 2
+        )
+        let centerY = bitmap.pixelsHigh / 2
+        XCTAssertLessThan(
+            bitmap.colorAt(x: centerX, y: centerY)?.alphaComponent ?? 1,
+            0.05
+        )
+
+        let outlineColors = (-6...6).flatMap { xOffset in
+            (-6...6).compactMap { yOffset in
+                bitmap.colorAt(
+                    x: centerX + xOffset,
+                    y: centerY + yOffset
+                )
+            }
+        }.filter { $0.alphaComponent > 0.2 }
+        XCTAssertFalse(outlineColors.isEmpty)
+        XCTAssertGreaterThan(
+            outlineColors.map(\.redComponent).max() ?? 0,
+            outlineColors.map(\.blueComponent).max() ?? 1
+        )
+
+        renderer.update(
+            pill: .resting(at: StatusItemArtwork.centerX(for: 1)),
+            activeIndex: 1
+        )
+        guard
+            let activeData = renderer.image.tiffRepresentation,
+            let activeBitmap = NSBitmapImageRep(data: activeData)
+        else {
+            return XCTFail("Could not inspect active full-screen pill")
+        }
+        XCTAssertLessThan(
+            activeBitmap.colorAt(x: centerX, y: centerY)?.alphaComponent ?? 1,
+            0.05
+        )
+    }
+
+    private func opaquePixelBounds(
+        in bitmap: NSBitmapImageRep,
+        minimumAlpha: CGFloat = 0.8
+    ) -> NSRect? {
         var minimumX = bitmap.pixelsWide
         var minimumY = bitmap.pixelsHigh
         var maximumX = -1
@@ -307,7 +707,10 @@ final class SpaceViewModelTests: XCTestCase {
 
         for y in 0..<bitmap.pixelsHigh {
             for x in 0..<bitmap.pixelsWide {
-                guard (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.8 else {
+                guard
+                    (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0)
+                        > minimumAlpha
+                else {
                     continue
                 }
                 minimumX = min(minimumX, x)
