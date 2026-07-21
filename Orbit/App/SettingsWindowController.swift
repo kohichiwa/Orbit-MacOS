@@ -325,6 +325,7 @@ private struct InteractiveDemoZone: View {
     @State private var hoveredIndex: Int?
     @State private var paletteIndex: Int?
     @State private var paletteRequestID = UUID()
+    @State private var glowIsVisible = false
 
     private var previewColors: [NSColor] {
         colors.isEmpty
@@ -335,16 +336,11 @@ private struct InteractiveDemoZone: View {
     var body: some View {
         ZStack {
             IndicatorGlow(
-                color: activeGlowColor,
-                horizontalOffset: activeGlowHorizontalOffset
+                target: activeGlowTarget,
+                visibility: glowIsVisible ? 1 : 0
             )
-            .animation(
-                OrbitMotion.colorChange(
-                    enabled: configuration.animationsEnabled,
-                    reduceMotion: reduceMotion
-                ),
-                value: colorSignature
-            )
+            .animation(glowAnimation, value: activeGlowTarget)
+            .animation(glowAnimation, value: glowIsVisible)
             .allowsHitTesting(false)
 
             if !indicators.isEmpty {
@@ -428,6 +424,7 @@ private struct InteractiveDemoZone: View {
         )
         .onAppear {
             synchronizeActiveIndex()
+            showGlow()
         }
         .onChange(of: requestedConfiguration) {
             paletteRequestID = UUID()
@@ -479,6 +476,14 @@ private struct InteractiveDemoZone: View {
         )
     }
 
+    private var glowAnimation: Animation? {
+        OrbitMotion.indicatorChange(
+            style: configuration.animationStyle,
+            enabled: configuration.animationsEnabled,
+            reduceMotion: reduceMotion
+        )
+    }
+
     private var requestedConfiguration: DemoVisualConfiguration {
         DemoVisualConfiguration(
             sizeScale: sizeScale,
@@ -492,10 +497,6 @@ private struct InteractiveDemoZone: View {
         requestedConfiguration
     }
 
-    private var colorSignature: String {
-        previewColors.map(\.description).joined(separator: "|")
-    }
-
     private var activeGlowColor: NSColor {
         guard indicators.indices.contains(activeIndex) else {
             return .controlAccentColor
@@ -506,6 +507,13 @@ private struct InteractiveDemoZone: View {
     private var activeGlowHorizontalOffset: CGFloat {
         guard indicators.indices.contains(activeIndex) else { return 0 }
         return paletteHorizontalOffset(for: activeIndex)
+    }
+
+    private var activeGlowTarget: IndicatorGlowTarget {
+        IndicatorGlowTarget(
+            color: activeGlowColor,
+            horizontalOffset: activeGlowHorizontalOffset
+        )
     }
 
     private func color(for kind: SpaceIndicatorKind) -> NSColor {
@@ -581,28 +589,91 @@ private struct InteractiveDemoZone: View {
         activeIndex = currentActiveIndex
     }
 
+    private func showGlow() {
+        guard !glowIsVisible else { return }
+        DispatchQueue.main.async {
+            withAnimation(glowAnimation) {
+                glowIsVisible = true
+            }
+        }
+    }
+
 }
 
-private struct IndicatorGlow: View {
-    let color: NSColor
-    let horizontalOffset: CGFloat
+private struct IndicatorGlowTarget: Equatable {
+    var red: CGFloat
+    var green: CGFloat
+    var blue: CGFloat
+    var alpha: CGFloat
+    var horizontalOffset: CGFloat
+
+    init(color: NSColor, horizontalOffset: CGFloat) {
+        let resolvedColor = color.usingColorSpace(.extendedSRGB)
+            ?? NSColor.controlAccentColor.usingColorSpace(.extendedSRGB)!
+        red = resolvedColor.redComponent
+        green = resolvedColor.greenComponent
+        blue = resolvedColor.blueComponent
+        alpha = resolvedColor.alphaComponent
+        self.horizontalOffset = horizontalOffset
+    }
+}
+
+private struct IndicatorGlow: View, Animatable {
+    var target: IndicatorGlowTarget
+    var visibility: CGFloat
+
+    var animatableData: AnimatablePair<
+        AnimatablePair<CGFloat, CGFloat>,
+        AnimatablePair<
+            AnimatablePair<CGFloat, CGFloat>,
+            AnimatablePair<CGFloat, CGFloat>
+        >
+    > {
+        get {
+            AnimatablePair(
+                AnimatablePair(target.red, target.green),
+                AnimatablePair(
+                    AnimatablePair(target.blue, target.alpha),
+                    AnimatablePair(target.horizontalOffset, visibility)
+                )
+            )
+        }
+        set {
+            target.red = newValue.first.first
+            target.green = newValue.first.second
+            target.blue = newValue.second.first.first
+            target.alpha = newValue.second.first.second
+            target.horizontalOffset = newValue.second.second.first
+            visibility = newValue.second.second.second
+        }
+    }
 
     var body: some View {
         GeometryReader { proxy in
+            let visibleAmount = min(max(visibility, 0), 1)
+            let glowColor = Color(
+                .sRGB,
+                red: Double(target.red),
+                green: Double(target.green),
+                blue: Double(target.blue),
+                opacity: Double(target.alpha)
+            )
+
             RadialGradient(
                 colors: [
-                    Color(nsColor: color).opacity(0.22),
-                    Color(nsColor: color).opacity(0.09),
+                    glowColor.opacity(0.22),
+                    glowColor.opacity(0.09),
                     .clear
                 ],
                 center: .center,
                 startRadius: 0,
-                endRadius: 310
+                endRadius: 254 + 56 * visibleAmount
             )
             .frame(width: 620, height: 620)
-            .blur(radius: 18)
+            .blur(radius: 22 - 4 * visibleAmount)
+            .opacity(visibleAmount)
             .position(
-                x: proxy.size.width / 2 + horizontalOffset,
+                x: proxy.size.width / 2 + target.horizontalOffset,
                 y: proxy.size.height / 2 + 26
             )
         }
