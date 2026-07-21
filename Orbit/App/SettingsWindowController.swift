@@ -171,8 +171,8 @@ private struct SettingsControls: View {
                 VStack(alignment: .leading, spacing: 15) {
                     HStack {
                         SettingsSectionTitle(
-                            title: "Внешний вид",
-                            symbol: "circle.hexagongrid"
+                            title: "Оформление",
+                            symbol: "circle.lefthalf.filled"
                         )
                         Spacer()
                         Button {
@@ -223,19 +223,10 @@ private struct SettingsControls: View {
                         isOn: $settings.animateIndicator
                     )
 
-                    Picker(
-                        "Стиль анимации",
-                        selection: $settings.indicatorAnimationStyle
-                    ) {
-                        ForEach(IndicatorAnimationStyle.allCases) { style in
-                            Text(style.title).tag(style)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .controlSize(.small)
-                    .disabled(!settings.animateIndicator)
-                    .opacity(settings.animateIndicator ? 1 : 0.5)
+                    AnimationStyleSelector(
+                        selection: $settings.indicatorAnimationStyle,
+                        isEnabled: settings.animateIndicator
+                    )
                     .padding(.bottom, 10)
 
                     Divider().opacity(0.55)
@@ -303,6 +294,86 @@ private struct CompactToggleRow: View {
     }
 }
 
+private struct AnimationStyleSelector: View {
+    @Binding var selection: IndicatorAnimationStyle
+    let isEnabled: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hoveredStyle: IndicatorAnimationStyle?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(IndicatorAnimationStyle.allCases) { style in
+                Button {
+                    selection = style
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: symbol(for: style))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(
+                                selection == style ? Color.accentColor : .secondary
+                            )
+                        Text(style.title)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(backgroundColor(for: style))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(borderColor(for: style), lineWidth: 1)
+                            }
+                    }
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    hoveredStyle = hovering ? style : nil
+                }
+                .accessibilityLabel("Стиль анимации: \(style.title)")
+                .accessibilityAddTraits(selection == style ? .isSelected : [])
+            }
+        }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.45)
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.14),
+            value: hoveredStyle
+        )
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.18),
+            value: selection
+        )
+    }
+
+    private func symbol(for style: IndicatorAnimationStyle) -> String {
+        switch style {
+        case .seamless:
+            "waveform.path"
+        case .classic:
+            "circle"
+        }
+    }
+
+    private func backgroundColor(
+        for style: IndicatorAnimationStyle
+    ) -> Color {
+        if selection == style {
+            return Color.accentColor.opacity(0.13)
+        }
+        return Color.primary.opacity(hoveredStyle == style ? 0.065 : 0.025)
+    }
+
+    private func borderColor(for style: IndicatorAnimationStyle) -> Color {
+        selection == style
+            ? Color.accentColor.opacity(0.28)
+            : Color.primary.opacity(hoveredStyle == style ? 0.12 : 0.07)
+    }
+}
+
 private struct DemoVisualConfiguration: Equatable {
     let sizeScale: Double
     let spacingScale: Double
@@ -326,6 +397,8 @@ private struct InteractiveDemoZone: View {
     @State private var paletteIndex: Int?
     @State private var paletteRequestID = UUID()
     @State private var glowIsVisible = false
+    @State private var isInfoPresented = false
+    @State private var isInfoHovered = false
 
     private var previewColors: [NSColor] {
         colors.isEmpty
@@ -376,8 +449,9 @@ private struct InteractiveDemoZone: View {
                                         }
                                     )
                                 }
-                                .help(helpText(for: index))
-                                .accessibilityLabel(helpText(for: index))
+                                .accessibilityLabel(
+                                    indicatorAccessibilityLabel(for: index)
+                                )
                         }
                     }
                 }
@@ -406,6 +480,57 @@ private struct InteractiveDemoZone: View {
                 .zIndex(20)
             }
 
+            HStack(alignment: .top, spacing: 4) {
+                if isInfoPresented {
+                    DemoInfoBubble()
+                        .transition(.liquidPalette)
+                }
+
+                Button {
+                    toggleInfo()
+                } label: {
+                    Image(systemName: "info")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 23, height: 23)
+                        .background(
+                            isInfoHovered
+                                ? Color.primary.opacity(0.075)
+                                : Color.primary.opacity(0.035),
+                            in: Circle()
+                        )
+                        .overlay {
+                            Circle()
+                                .strokeBorder(
+                                    Color.primary.opacity(
+                                        isInfoPresented ? 0.22 : 0.12
+                                    ),
+                                    lineWidth: 0.75
+                                )
+                        }
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 8)
+                .onHover { isInfoHovered = $0 }
+                .accessibilityLabel("Справка по демонстрации")
+                .accessibilityValue(
+                    isInfoPresented ? "Открыта" : "Закрыта"
+                )
+            }
+            .padding(.top, 14)
+            .padding(.trailing, 14)
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topTrailing
+            )
+            .animation(paletteSpring, value: isInfoPresented)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.14),
+                value: isInfoHovered
+            )
+            .zIndex(30)
+
             TrackpadSwipeMonitor { direction in
                 moveActive(by: direction)
             }
@@ -430,6 +555,7 @@ private struct InteractiveDemoZone: View {
             paletteRequestID = UUID()
             withAnimation(paletteSpring) {
                 paletteIndex = nil
+                isInfoPresented = false
             }
         }
         .onChange(of: currentActiveIndex) { synchronizeActiveIndex() }
@@ -527,6 +653,12 @@ private struct InteractiveDemoZone: View {
         let requestID = UUID()
         paletteRequestID = requestID
 
+        if isInfoPresented {
+            withAnimation(paletteSpring) {
+                isInfoPresented = false
+            }
+        }
+
         guard paletteIndex != index else {
             withAnimation(paletteSpring) {
                 paletteIndex = nil
@@ -572,12 +704,20 @@ private struct InteractiveDemoZone: View {
         activeIndex = destination
     }
 
-    private func helpText(for index: Int) -> String {
+    private func indicatorAccessibilityLabel(for index: Int) -> String {
         switch indicators[index] {
         case .desktop:
             "Рабочий стол \(indicators[index].colorIndex + 1) — нажмите, чтобы изменить цвет"
         case .fullscreen:
             "Полноэкранное приложение — используется цвет связанного рабочего стола"
+        }
+    }
+
+    private func toggleInfo() {
+        paletteRequestID = UUID()
+        withAnimation(paletteSpring) {
+            paletteIndex = nil
+            isInfoPresented.toggle()
         }
     }
 
@@ -771,6 +911,27 @@ private struct IndicatorColorPalette: View {
 
 }
 
+private struct DemoInfoBubble: View {
+    var body: some View {
+        Text("Клик — изменить цвет\nСвайп двумя пальцами — листать")
+            .font(.system(size: 11.5))
+            .foregroundStyle(.primary)
+            .lineSpacing(1)
+            .padding(.leading, 12)
+            .padding(.trailing, 20)
+            .padding(.vertical, 12)
+            .frame(width: 224, alignment: .leading)
+            .background(.regularMaterial, in: InfoBubbleShape())
+            .overlay {
+                InfoBubbleShape()
+                    .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+            }
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+            .accessibilityElement(children: .combine)
+    }
+}
+
 private struct LiquidPaletteModifier: ViewModifier {
     let progress: CGFloat
 
@@ -793,6 +954,58 @@ extension AnyTransition {
             active: LiquidPaletteModifier(progress: 0),
             identity: LiquidPaletteModifier(progress: 1)
         )
+    }
+}
+
+private struct InfoBubbleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let pointerWidth: CGFloat = 8
+        let pointerHalfWidth: CGFloat = 6
+        let radius: CGFloat = 14
+        let pointerCenterY = rect.minY + 20
+        let bodyRight = rect.maxX - pointerWidth
+        var path = Path()
+
+        path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+        path.addLine(to: CGPoint(x: bodyRight - radius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyRight, y: rect.minY + radius),
+            control: CGPoint(x: bodyRight, y: rect.minY)
+        )
+        path.addLine(
+            to: CGPoint(x: bodyRight, y: pointerCenterY - pointerHalfWidth)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - 1.1, y: pointerCenterY - 1.4),
+            control1: CGPoint(x: bodyRight + 0.2, y: pointerCenterY - 4.5),
+            control2: CGPoint(x: rect.maxX - 1.7, y: pointerCenterY - 2.7)
+        )
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - 1.1, y: pointerCenterY + 1.4),
+            control: CGPoint(x: rect.maxX + 0.3, y: pointerCenterY)
+        )
+        path.addCurve(
+            to: CGPoint(x: bodyRight, y: pointerCenterY + pointerHalfWidth),
+            control1: CGPoint(x: rect.maxX - 1.7, y: pointerCenterY + 2.7),
+            control2: CGPoint(x: bodyRight + 0.2, y: pointerCenterY + 4.5)
+        )
+        path.addLine(to: CGPoint(x: bodyRight, y: rect.maxY - radius))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyRight - radius, y: rect.maxY),
+            control: CGPoint(x: bodyRight, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY - radius),
+            control: CGPoint(x: rect.minX, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + radius, y: rect.minY),
+            control: CGPoint(x: rect.minX, y: rect.minY)
+        )
+        path.closeSubpath()
+        return path
     }
 }
 
