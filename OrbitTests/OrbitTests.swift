@@ -277,6 +277,82 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCrowdedStatusItemScalesToItsWidthBudget() {
+        let regularScale = StatusItemArtwork.fittedSizeScale(
+            for: 4,
+            requestedSizeScale: 1.3,
+            spacingScale: 1
+        )
+        XCTAssertEqual(regularScale, 1.3, accuracy: 0.0001)
+
+        for count in [13, 16, 32] {
+            let fittedScale = StatusItemArtwork.fittedSizeScale(
+                for: count,
+                requestedSizeScale: 1.7,
+                spacingScale: 1 + 8.0 / 12
+            )
+            let fittedWidth = StatusItemArtwork.preferredWidth(
+                for: count,
+                sizeScale: fittedScale,
+                spacingScale: 1 + 8.0 / 12
+            )
+
+            XCTAssertGreaterThan(fittedScale, 0)
+            XCTAssertLessThan(fittedScale, 1.7)
+            XCTAssertLessThanOrEqual(
+                fittedWidth,
+                StatusItemArtwork.maximumStatusItemWidth + 0.001
+            )
+        }
+    }
+
+    func testPopupDismissalOnlyAcceptsClicksOutsideProtectedContent() {
+        let protectedRects = [
+            CGRect(x: 20, y: 30, width: 100, height: 40),
+            CGRect(x: 180, y: 20, width: 24, height: 24)
+        ]
+
+        XCTAssertFalse(PopupDismissalPolicy.shouldDismiss(
+            clickPoint: CGPoint(x: 60, y: 50),
+            protectedRects: protectedRects
+        ))
+        XCTAssertFalse(PopupDismissalPolicy.shouldDismiss(
+            clickPoint: CGPoint(x: 17, y: 50),
+            protectedRects: protectedRects
+        ))
+        XCTAssertTrue(PopupDismissalPolicy.shouldDismiss(
+            clickPoint: CGPoint(x: 150, y: 90),
+            protectedRects: protectedRects
+        ))
+    }
+
+    func testDemoSwipeRegionExtendsThroughBackgroundTransition() {
+        let demoBounds = CGRect(x: 0, y: 0, width: 540, height: 218)
+        let transitionExtension: CGFloat = 72
+
+        XCTAssertTrue(DemoSwipeRegionPolicy.contains(
+            CGPoint(x: 270, y: 217),
+            in: demoBounds,
+            bottomExtension: transitionExtension
+        ))
+        XCTAssertTrue(DemoSwipeRegionPolicy.contains(
+            CGPoint(x: 270, y: 289),
+            in: demoBounds,
+            bottomExtension: transitionExtension
+        ))
+        XCTAssertFalse(DemoSwipeRegionPolicy.contains(
+            CGPoint(x: 270, y: 291),
+            in: demoBounds,
+            bottomExtension: transitionExtension
+        ))
+        XCTAssertFalse(DemoSwipeRegionPolicy.contains(
+            CGPoint(x: 541, y: 250),
+            in: demoBounds,
+            bottomExtension: transitionExtension
+        ))
+    }
+
+    @MainActor
     func testPillMotionIsSymmetricBetweenEdgeAndCenter() {
         let center = StatusItemArtwork.centerX(for: 1)
         let edge = StatusItemArtwork.centerX(for: 2)
@@ -384,18 +460,78 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPillFeedbackMotionAlwaysStaysBrief() {
-        let motion = StatusPillMotion(
-            fromX: StatusItemArtwork.centerX(for: 0),
-            toX: StatusItemArtwork.centerX(for: 99),
-            startTime: 0,
-            style: .seamless
+    func testContinuousPillBridgesSourceAndDestinationWithoutAGap() {
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 3)
+        let startTime: TimeInterval = 16
+        let forward = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: startTime,
+            style: .continuous
+        )
+        let backward = StatusPillMotion(
+            fromX: target,
+            toX: source,
+            startTime: startTime,
+            style: .continuous
         )
 
-        XCTAssertLessThanOrEqual(
-            motion.duration,
-            OrbitMotion.maximumFeedbackDuration
+        let forwardBridge = forward.frame(
+            at: startTime + forward.duration * 0.62
         )
+        let backwardBridge = backward.frame(
+            at: startTime + backward.duration * 0.62
+        )
+        let forwardLeft = forwardBridge.x - forwardBridge.width / 2
+        let forwardRight = forwardBridge.x + forwardBridge.width / 2
+
+        XCTAssertLessThanOrEqual(forwardLeft, source)
+        XCTAssertGreaterThanOrEqual(forwardRight, target)
+        XCTAssertGreaterThan(forwardBridge.width, target - source)
+        XCTAssertGreaterThan(forwardBridge.waist, 0.7)
+        XCTAssertEqual(
+            forwardBridge.width,
+            backwardBridge.width,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            forwardBridge.waist,
+            backwardBridge.waist,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            forwardBridge.x + backwardBridge.x,
+            source + target,
+            accuracy: 0.001
+        )
+
+        XCTAssertEqual(
+            forward.frame(at: startTime + forward.duration),
+            .resting(at: target)
+        )
+        XCTAssertEqual(forward.frame(at: startTime).waist, 0)
+        XCTAssertEqual(
+            forward.frame(at: startTime + forward.duration).waist,
+            0
+        )
+    }
+
+    @MainActor
+    func testPillFeedbackMotionAlwaysStaysBrief() {
+        for style in IndicatorAnimationStyle.allCases {
+            let motion = StatusPillMotion(
+                fromX: StatusItemArtwork.centerX(for: 0),
+                toX: StatusItemArtwork.centerX(for: 99),
+                startTime: 0,
+                style: style
+            )
+
+            XCTAssertLessThanOrEqual(
+                motion.duration,
+                OrbitMotion.maximumFeedbackDuration
+            )
+        }
     }
 
     @MainActor
@@ -672,6 +808,85 @@ final class SpaceViewModelTests: XCTestCase {
         XCTAssertNotEqual(
             plainFullscreen.image.tiffRepresentation,
             outlinedFullscreen.image.tiffRepresentation
+        )
+    }
+
+    @MainActor
+    func testShapeStyleChangesDesktopAndFullscreenSilhouettes() {
+        let sizeScale: CGFloat = 1.7
+        let indicatorKinds: [SpaceIndicatorKind] = [
+            .desktop(colorIndex: 0),
+            .fullscreen(colorIndex: 0)
+        ]
+        func image(for style: IndicatorShapeStyle) -> Data? {
+            let renderer = StatusIndicatorImageRenderer(
+                count: indicatorKinds.count,
+                indicatorKinds: indicatorKinds,
+                indicatorColors: [.systemBlue],
+                shapeStyle: style,
+                sizeScale: sizeScale
+            )
+            renderer.update(
+                pill: .resting(
+                    at: StatusItemArtwork.centerX(
+                        for: 0,
+                        sizeScale: sizeScale
+                    ),
+                    sizeScale: sizeScale,
+                    shapeStyle: style
+                ),
+                activeIndex: 0
+            )
+            return renderer.image.tiffRepresentation
+        }
+
+        XCTAssertNotEqual(
+            image(for: .standard),
+            image(for: .circles)
+        )
+        XCTAssertNotEqual(
+            image(for: .standard),
+            image(for: .roundedRectangles)
+        )
+        XCTAssertNotEqual(
+            image(for: .circles),
+            image(for: .roundedRectangles)
+        )
+
+        let circle = StatusPillFrame.resting(
+            at: 0,
+            shapeStyle: .circles
+        )
+        XCTAssertEqual(circle.width, circle.height)
+        XCTAssertGreaterThan(
+            StatusPillFrame.resting(at: 0, shapeStyle: .standard).width,
+            circle.width
+        )
+
+        let circleMotion = StatusPillMotion(
+            fromX: 0,
+            toX: StatusItemArtwork.itemWidth,
+            startTime: 0,
+            shapeStyle: .circles
+        )
+        XCTAssertEqual(
+            circleMotion.frame(at: circleMotion.duration),
+            .resting(
+                at: StatusItemArtwork.itemWidth,
+                shapeStyle: .circles
+            )
+        )
+        let circleHover = StatusHoverMotion(
+            index: 0,
+            fromScale: CGSize(width: 1, height: 1),
+            isHovered: true,
+            isActive: true,
+            startTime: 0,
+            shapeStyle: .circles
+        )
+        XCTAssertEqual(
+            circleHover.targetScale.width,
+            circleHover.targetScale.height
         )
     }
 

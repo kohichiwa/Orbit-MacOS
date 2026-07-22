@@ -4,8 +4,9 @@ import Foundation
 import ServiceManagement
 
 enum IndicatorAnimationStyle: String, CaseIterable, Identifiable {
-    case seamless
     case classic
+    case seamless
+    case continuous
 
     var id: Self { self }
 
@@ -15,6 +16,36 @@ enum IndicatorAnimationStyle: String, CaseIterable, Identifiable {
             "Бесшовная"
         case .classic:
             "Классическая"
+        case .continuous:
+            "Непрерывная"
+        }
+    }
+
+    var blendsIndicatorAppearanceDuringTransition: Bool {
+        switch self {
+        case .classic:
+            false
+        case .seamless, .continuous:
+            true
+        }
+    }
+}
+
+enum IndicatorShapeStyle: String, CaseIterable, Identifiable {
+    case standard
+    case circles
+    case roundedRectangles
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .standard:
+            "Обычные"
+        case .circles:
+            "Круги"
+        case .roundedRectangles:
+            "Квадраты"
         }
     }
 }
@@ -25,6 +56,7 @@ enum VisualSettingsChange {
     case outline
     case animationEnabled(Bool)
     case animationStyle
+    case shapeStyle
 }
 
 @MainActor
@@ -32,6 +64,9 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
     private enum Key {
         static let animateIndicator = "animateIndicator"
         static let indicatorAnimationStyle = "indicatorAnimationStyle"
+        // V2 distinguishes the three real silhouettes from the earlier
+        // two-option prototype where `circles` meant the standard dot + pill.
+        static let indicatorShapeStyle = "indicatorShapeStyleV2"
         static let indicatorSizeScale = "indicatorSizeScale"
         static let indicatorSpacingScale = "indicatorSpacingScale"
         static let showsIndicatorOutline = "showsIndicatorOutline"
@@ -71,6 +106,16 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
                 forKey: Key.indicatorAnimationStyle
             )
             visualSettingsChanges.send(.animationStyle)
+        }
+    }
+
+    @Published var indicatorShapeStyle: IndicatorShapeStyle {
+        didSet {
+            defaults.set(
+                indicatorShapeStyle.rawValue,
+                forKey: Key.indicatorShapeStyle
+            )
+            visualSettingsChanges.send(.shapeStyle)
         }
     }
 
@@ -123,6 +168,10 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
             .string(forKey: Key.indicatorAnimationStyle)
             .flatMap(IndicatorAnimationStyle.init(rawValue:))
             ?? .seamless
+        indicatorShapeStyle = defaults
+            .string(forKey: Key.indicatorShapeStyle)
+            .flatMap(IndicatorShapeStyle.init(rawValue:))
+            ?? .standard
         indicatorSizeScale = Self.normalizedIndicatorSize(
             defaults.object(forKey: Key.indicatorSizeScale) == nil
                 ? 1
@@ -147,6 +196,10 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         defaults.set(
             indicatorAnimationStyle.rawValue,
             forKey: Key.indicatorAnimationStyle
+        )
+        defaults.set(
+            indicatorShapeStyle.rawValue,
+            forKey: Key.indicatorShapeStyle
         )
         defaults.set(
             indicatorColors.map(Self.colorComponents),

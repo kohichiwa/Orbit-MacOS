@@ -12,11 +12,18 @@ enum OrbitMotion {
     nonisolated static let maximumFeedbackDuration: TimeInterval = 0.50
     nonisolated static let seamlessDuration: TimeInterval = 0.42
     nonisolated static let classicDuration: TimeInterval = 0.235
+    nonisolated static let continuousDuration: TimeInterval = 0.46
     nonisolated static let hoverEnterDuration: TimeInterval = 0.22
     nonisolated static let hoverExitDuration: TimeInterval = 0.30
     nonisolated static let paletteDuration: TimeInterval = 0.28
     nonisolated static let colorDuration: TimeInterval = 0.20
     nonisolated static let pressDuration: TimeInterval = 0.10
+    nonisolated static let selectionHoverDuration: TimeInterval = 0.14
+    nonisolated static let selectionChangeDuration: TimeInterval = 0.18
+    nonisolated static let reducedMotionFadeDuration: TimeInterval = 0.12
+    nonisolated static let flowStretchDuration: TimeInterval = 0.08
+    nonisolated static let flowSquashDuration: TimeInterval = 0.14
+    nonisolated static let flowSettleDuration: TimeInterval = 0.16
 
     nonisolated static func allowsMotion(
         userEnabled: Bool,
@@ -39,6 +46,8 @@ enum OrbitMotion {
             return .smooth(duration: seamlessDuration, extraBounce: 0)
         case .classic:
             return .snappy(duration: classicDuration, extraBounce: 0)
+        case .continuous:
+            return .smooth(duration: continuousDuration, extraBounce: 0)
         }
     }
 
@@ -60,11 +69,23 @@ enum OrbitMotion {
         enabled: Bool,
         reduceMotion: Bool
     ) -> Animation? {
-        guard allowsMotion(
-            userEnabled: enabled,
-            reduceMotion: reduceMotion
-        ) else { return nil }
+        guard enabled else { return nil }
+        if reduceMotion {
+            return .easeOut(duration: reducedMotionFadeDuration)
+        }
         return .snappy(duration: paletteDuration, extraBounce: 0)
+    }
+
+    static func selectionHover(reduceMotion: Bool) -> Animation? {
+        reduceMotion
+            ? nil
+            : .easeOut(duration: selectionHoverDuration)
+    }
+
+    static func selectionChange(reduceMotion: Bool) -> Animation? {
+        reduceMotion
+            ? nil
+            : .easeOut(duration: selectionChangeDuration)
     }
 
     static func colorChange(
@@ -82,6 +103,24 @@ enum OrbitMotion {
         allowsMotion(userEnabled: true, reduceMotion: reduceMotion)
             ? .snappy(duration: pressDuration, extraBounce: 0)
             : nil
+    }
+
+    static func flowStretch(reduceMotion: Bool) -> Animation? {
+        reduceMotion
+            ? nil
+            : .smooth(duration: flowStretchDuration, extraBounce: 0)
+    }
+
+    static func flowSquash(reduceMotion: Bool) -> Animation? {
+        reduceMotion
+            ? nil
+            : .snappy(duration: flowSquashDuration, extraBounce: 0)
+    }
+
+    static func flowSettle(reduceMotion: Bool) -> Animation? {
+        reduceMotion
+            ? nil
+            : .smooth(duration: flowSettleDuration, extraBounce: 0)
     }
 
     static func refreshDisappear(reduceMotion: Bool) -> Animation? {

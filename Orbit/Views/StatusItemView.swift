@@ -85,9 +85,7 @@ struct SpaceDotsView: View {
             return
         }
 
-        withAnimation(
-            .smooth(duration: 0.08, extraBounce: 0)
-        ) {
+        withAnimation(OrbitMotion.flowStretch(reduceMotion: reduceMotion)) {
             liquidPhase = .stretch
         }
 
@@ -97,9 +95,7 @@ struct SpaceDotsView: View {
             } catch {
                 return
             }
-            withAnimation(
-                .snappy(duration: 0.14, extraBounce: 0)
-            ) {
+            withAnimation(OrbitMotion.flowSquash(reduceMotion: reduceMotion)) {
                 liquidPhase = .squash
             }
             do {
@@ -107,9 +103,7 @@ struct SpaceDotsView: View {
             } catch {
                 return
             }
-            withAnimation(
-                .smooth(duration: 0.16, extraBounce: 0)
-            ) {
+            withAnimation(OrbitMotion.flowSettle(reduceMotion: reduceMotion)) {
                 liquidPhase = .rest
             }
         }

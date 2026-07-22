@@ -19,6 +19,7 @@ nonisolated final class StatusIndicatorImageRenderer {
     private let indicatorKinds: [SpaceIndicatorKind]
     private let indicatorColors: [NSColor]
     private let showsThinOutline: Bool
+    private let shapeStyle: IndicatorShapeStyle
     private let sizeScale: CGFloat
     private let itemWidth: CGFloat
     private let horizontalPadding: CGFloat
@@ -31,6 +32,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         indicatorKinds: [SpaceIndicatorKind]? = nil,
         indicatorColors: [NSColor] = [.controlAccentColor],
         showsThinOutline: Bool = false,
+        shapeStyle: IndicatorShapeStyle = .standard,
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1,
         imageHeight: CGFloat = StatusItemArtwork.imageHeight,
@@ -38,6 +40,7 @@ nonisolated final class StatusIndicatorImageRenderer {
     ) {
         self.count = max(count, 1)
         self.showsThinOutline = showsThinOutline
+        self.shapeStyle = shapeStyle
         self.sizeScale = sizeScale
         itemWidth = StatusItemArtwork.itemWidth(
             sizeScale: sizeScale,
@@ -204,7 +207,8 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 sourceIndex: transition.sourceIndex,
                 targetIndex: transition.targetIndex,
-                progress: transition.progress
+                progress: transition.progress,
+                waist: pill.waist
             )
         } else {
             drawActiveIndicator(
@@ -256,7 +260,8 @@ nonisolated final class StatusIndicatorImageRenderer {
         in rect: NSRect,
         sourceIndex: Int,
         targetIndex: Int,
-        progress: CGFloat
+        progress: CGFloat,
+        waist: CGFloat
     ) {
         let visualProgress = smoothStep(
             remap(progress, from: 0.22, to: 0.82)
@@ -273,7 +278,8 @@ nonisolated final class StatusIndicatorImageRenderer {
             drawActiveIndicator(
                 in: rect,
                 kind: targetKind,
-                color: color
+                color: color,
+                waist: waist
             )
             return
         }
@@ -286,13 +292,15 @@ nonisolated final class StatusIndicatorImageRenderer {
             in: rect,
             kind: sourceKind,
             color: color,
-            opacity: 1 - visualProgress
+            opacity: 1 - visualProgress,
+            waist: waist
         )
         drawActiveIndicator(
             in: rect,
             kind: targetKind,
             color: color,
-            opacity: visualProgress
+            opacity: visualProgress,
+            waist: waist
         )
     }
 
@@ -300,7 +308,8 @@ nonisolated final class StatusIndicatorImageRenderer {
         in rect: NSRect,
         kind: SpaceIndicatorKind,
         color: NSColor,
-        opacity: CGFloat = 1
+        opacity: CGFloat = 1,
+        waist: CGFloat = 0
     ) {
         guard opacity > 0.001 else { return }
         if kind.isFullscreen {
@@ -309,14 +318,16 @@ nonisolated final class StatusIndicatorImageRenderer {
                 color: color,
                 strokeOpacity: opacity,
                 thinOutlineOpacity: 0.25 * opacity,
-                lineWidth: fullscreenOutlineWidth * 1.5
+                lineWidth: fullscreenOutlineWidth * 1.5,
+                waist: waist
             )
         } else {
             drawFilledIndicator(
                 in: rect,
                 color: color,
                 fillOpacity: opacity,
-                outlineOpacity: 0.25 * opacity
+                outlineOpacity: 0.25 * opacity,
+                waist: waist
             )
         }
     }
@@ -326,7 +337,8 @@ nonisolated final class StatusIndicatorImageRenderer {
         color: NSColor,
         strokeOpacity: CGFloat,
         thinOutlineOpacity: CGFloat,
-        lineWidth: CGFloat
+        lineWidth: CGFloat,
+        waist: CGFloat = 0
     ) {
         if showsThinOutline {
             let outlineWidth = thinOutlineWidth
@@ -336,7 +348,8 @@ nonisolated final class StatusIndicatorImageRenderer {
                     for: color,
                     opacity: thinOutlineOpacity
                 ),
-                lineWidth: lineWidth + outlineWidth * 2
+                lineWidth: lineWidth + outlineWidth * 2,
+                waist: waist
             )
             drawOutline(
                 in: rect.insetBy(
@@ -344,14 +357,16 @@ nonisolated final class StatusIndicatorImageRenderer {
                     dy: outlineWidth
                 ),
                 color: color.withAlphaComponent(strokeOpacity),
-                lineWidth: lineWidth
+                lineWidth: lineWidth,
+                waist: waist
             )
             return
         }
         drawOutline(
             in: rect,
             color: color.withAlphaComponent(strokeOpacity),
-            lineWidth: lineWidth
+            lineWidth: lineWidth,
+            waist: waist
         )
     }
 
@@ -359,14 +374,11 @@ nonisolated final class StatusIndicatorImageRenderer {
         in rect: NSRect,
         color: NSColor,
         fillOpacity: CGFloat,
-        outlineOpacity: CGFloat
+        outlineOpacity: CGFloat,
+        waist: CGFloat = 0
     ) {
         color.withAlphaComponent(fillOpacity).setFill()
-        NSBezierPath(
-            roundedRect: rect,
-            xRadius: rect.height / 2,
-            yRadius: rect.height / 2
-        ).fill()
+        indicatorPath(in: rect, waist: waist).fill()
 
         guard showsThinOutline else { return }
         drawOutline(
@@ -375,7 +387,8 @@ nonisolated final class StatusIndicatorImageRenderer {
                 for: color,
                 opacity: outlineOpacity
             ),
-            lineWidth: thinOutlineWidth
+            lineWidth: thinOutlineWidth,
+            waist: waist
         )
     }
 
@@ -481,20 +494,148 @@ nonisolated final class StatusIndicatorImageRenderer {
     private func drawOutline(
         in rect: NSRect,
         color: NSColor,
-        lineWidth: CGFloat
+        lineWidth: CGFloat,
+        waist: CGFloat = 0
     ) {
         let inset = lineWidth / 2
         let innerRect = rect.insetBy(dx: inset, dy: inset)
         guard innerRect.width > 0, innerRect.height > 0 else { return }
-        let path = NSBezierPath(
-            roundedRect: innerRect,
-            xRadius: innerRect.height / 2,
-            yRadius: innerRect.height / 2
-        )
+        let path = indicatorPath(in: innerRect, waist: waist)
         path.lineWidth = lineWidth
         path.lineJoinStyle = .round
         color.setStroke()
         path.stroke()
+    }
+
+    /// A subtly pinched liquid bridge. Its end caps retain the selected
+    /// indicator shape while two mirrored cubic curves pull the long edges
+    /// towards the centre. At zero waist this is the regular indicator path.
+    private func indicatorPath(
+        in rect: NSRect,
+        waist: CGFloat
+    ) -> NSBezierPath {
+        let amount = min(max(waist, 0), 1)
+        let radius = min(
+            cornerRadius(for: rect),
+            min(rect.width, rect.height) / 2
+        )
+        guard
+            amount > 0.001,
+            rect.width > rect.height * 1.6,
+            radius > 0
+        else {
+            return NSBezierPath(
+                roundedRect: rect,
+                xRadius: radius,
+                yRadius: radius
+            )
+        }
+
+        let curve: CGFloat = 0.552_284_75
+        let centreX = rect.midX
+        let waistDepth = min(
+            rect.height * 0.19 * amount,
+            rect.height / 2 - 0.5
+        )
+        let shoulderReach = max(
+            (rect.width / 2 - radius) * 0.58,
+            0
+        )
+        let leftShoulderControl = centreX - shoulderReach
+        let rightShoulderControl = centreX + shoulderReach
+        let neckControl = min(rect.width * 0.12, rect.height * 0.8)
+
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: rect.minX + radius, y: rect.maxY))
+        path.curve(
+            to: NSPoint(x: centreX, y: rect.maxY - waistDepth),
+            controlPoint1: NSPoint(x: leftShoulderControl, y: rect.maxY),
+            controlPoint2: NSPoint(
+                x: centreX - neckControl,
+                y: rect.maxY - waistDepth
+            )
+        )
+        path.curve(
+            to: NSPoint(x: rect.maxX - radius, y: rect.maxY),
+            controlPoint1: NSPoint(
+                x: centreX + neckControl,
+                y: rect.maxY - waistDepth
+            ),
+            controlPoint2: NSPoint(x: rightShoulderControl, y: rect.maxY)
+        )
+        path.curve(
+            to: NSPoint(x: rect.maxX, y: rect.maxY - radius),
+            controlPoint1: NSPoint(
+                x: rect.maxX - radius + curve * radius,
+                y: rect.maxY
+            ),
+            controlPoint2: NSPoint(
+                x: rect.maxX,
+                y: rect.maxY - radius + curve * radius
+            )
+        )
+        path.line(to: NSPoint(x: rect.maxX, y: rect.minY + radius))
+        path.curve(
+            to: NSPoint(x: rect.maxX - radius, y: rect.minY),
+            controlPoint1: NSPoint(
+                x: rect.maxX,
+                y: rect.minY + radius - curve * radius
+            ),
+            controlPoint2: NSPoint(
+                x: rect.maxX - radius + curve * radius,
+                y: rect.minY
+            )
+        )
+        path.curve(
+            to: NSPoint(x: centreX, y: rect.minY + waistDepth),
+            controlPoint1: NSPoint(x: rightShoulderControl, y: rect.minY),
+            controlPoint2: NSPoint(
+                x: centreX + neckControl,
+                y: rect.minY + waistDepth
+            )
+        )
+        path.curve(
+            to: NSPoint(x: rect.minX + radius, y: rect.minY),
+            controlPoint1: NSPoint(
+                x: centreX - neckControl,
+                y: rect.minY + waistDepth
+            ),
+            controlPoint2: NSPoint(x: leftShoulderControl, y: rect.minY)
+        )
+        path.curve(
+            to: NSPoint(x: rect.minX, y: rect.minY + radius),
+            controlPoint1: NSPoint(
+                x: rect.minX + radius - curve * radius,
+                y: rect.minY
+            ),
+            controlPoint2: NSPoint(
+                x: rect.minX,
+                y: rect.minY + radius - curve * radius
+            )
+        )
+        path.line(to: NSPoint(x: rect.minX, y: rect.maxY - radius))
+        path.curve(
+            to: NSPoint(x: rect.minX + radius, y: rect.maxY),
+            controlPoint1: NSPoint(
+                x: rect.minX,
+                y: rect.maxY - radius + curve * radius
+            ),
+            controlPoint2: NSPoint(
+                x: rect.minX + radius - curve * radius,
+                y: rect.maxY
+            )
+        )
+        path.close()
+        return path
+    }
+
+    private func cornerRadius(for rect: NSRect) -> CGFloat {
+        switch shapeStyle {
+        case .standard, .circles:
+            rect.height / 2
+        case .roundedRectangles:
+            rect.height * 0.28
+        }
     }
 
     private func inferredIndex(for pill: StatusPillFrame) -> Int? {

@@ -75,7 +75,22 @@ final class AppSettingsTests: XCTestCase {
 
             let restored = AppSettings(defaults: defaults)
             XCTAssertEqual(restored.indicatorAnimationStyle, .classic)
-            XCTAssertEqual(IndicatorAnimationStyle.allCases.count, 2)
+            XCTAssertEqual(
+                IndicatorAnimationStyle.allCases,
+                [.classic, .seamless, .continuous]
+            )
+        }
+    }
+
+    func testShapeStyleDefaultsToStandardAndPersists() {
+        withSettings { settings, defaults in
+            XCTAssertEqual(settings.indicatorShapeStyle, .standard)
+
+            settings.indicatorShapeStyle = .circles
+
+            let restored = AppSettings(defaults: defaults)
+            XCTAssertEqual(restored.indicatorShapeStyle, .circles)
+            XCTAssertEqual(IndicatorShapeStyle.allCases.count, 3)
         }
     }
 
@@ -112,8 +127,12 @@ final class AppSettingsTests: XCTestCase {
             enabled: false,
             reduceMotion: false
         ))
-        XCTAssertNil(OrbitMotion.palette(
+        XCTAssertNotNil(OrbitMotion.palette(
             enabled: true,
+            reduceMotion: true
+        ))
+        XCTAssertNil(OrbitMotion.palette(
+            enabled: false,
             reduceMotion: true
         ))
         XCTAssertNil(OrbitMotion.colorChange(
@@ -125,13 +144,30 @@ final class AppSettingsTests: XCTestCase {
             enabled: true,
             reduceMotion: false
         ))
+        XCTAssertNotNil(OrbitMotion.indicatorChange(
+            style: .continuous,
+            enabled: true,
+            reduceMotion: false
+        ))
         XCTAssertLessThanOrEqual(
             OrbitMotion.seamlessDuration,
             OrbitMotion.maximumFeedbackDuration
         )
         XCTAssertLessThanOrEqual(
+            OrbitMotion.continuousDuration,
+            OrbitMotion.maximumFeedbackDuration
+        )
+        XCTAssertLessThanOrEqual(
             OrbitMotion.hoverExitDuration,
             OrbitMotion.maximumFeedbackDuration
+        )
+        XCTAssertLessThanOrEqual(
+            OrbitMotion.selectionChangeDuration,
+            OrbitMotion.maximumFeedbackDuration
+        )
+        XCTAssertLessThan(
+            OrbitMotion.reducedMotionFadeDuration,
+            OrbitMotion.paletteDuration
         )
     }
 
@@ -143,6 +179,7 @@ final class AppSettingsTests: XCTestCase {
                 spacing: Double,
                 animationsEnabled: Bool,
                 style: IndicatorAnimationStyle,
+                shape: IndicatorShapeStyle,
                 outlineEnabled: Bool,
                 colorCount: Int
             )] = []
@@ -153,6 +190,7 @@ final class AppSettingsTests: XCTestCase {
                     settings.indicatorSpacingScale,
                     settings.animateIndicator,
                     settings.indicatorAnimationStyle,
+                    settings.indicatorShapeStyle,
                     settings.showsIndicatorOutline,
                     settings.indicatorColors.count
                 ))
@@ -163,15 +201,17 @@ final class AppSettingsTests: XCTestCase {
             settings.setIndicatorColor(.systemRed, at: 0)
             settings.animateIndicator = false
             settings.indicatorAnimationStyle = .classic
+            settings.indicatorShapeStyle = .roundedRectangles
             settings.showsIndicatorOutline = true
 
-            XCTAssertEqual(snapshots.count, 6)
+            XCTAssertEqual(snapshots.count, 7)
             XCTAssertEqual(snapshots[0].size, 1.2)
             XCTAssertEqual(snapshots[1].spacing, 1.25)
             XCTAssertEqual(snapshots[2].colorCount, 1)
             XCTAssertFalse(snapshots[3].animationsEnabled)
             XCTAssertEqual(snapshots[4].style, .classic)
-            XCTAssertTrue(snapshots[5].outlineEnabled)
+            XCTAssertEqual(snapshots[5].shape, .roundedRectangles)
+            XCTAssertTrue(snapshots[6].outlineEnabled)
             withExtendedLifetime(cancellable) {}
         }
     }

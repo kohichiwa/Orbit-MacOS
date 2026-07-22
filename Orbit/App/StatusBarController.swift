@@ -83,6 +83,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var presentedSpacingScale: CGFloat
     private var presentedAnimationsEnabled: Bool
     private var presentedAnimationStyle: IndicatorAnimationStyle
+    private var presentedShapeStyle: IndicatorShapeStyle
     private var presentedMenu: NSMenu?
     private lazy var settingsWindowController = SettingsWindowController(
         settings: settings,
@@ -96,6 +97,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         presentedSpacingScale = CGFloat(settings.indicatorSpacingScale)
         presentedAnimationsEnabled = settings.animateIndicator
         presentedAnimationStyle = settings.indicatorAnimationStyle
+        presentedShapeStyle = settings.indicatorShapeStyle
         super.init()
         configureStatusItem()
         observeChanges()
@@ -163,6 +165,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                         applyPendingVisualSettings()
                     }
                 case .animationStyle:
+                    beginArtworkRefresh()
+                case .shapeStyle:
                     beginArtworkRefresh()
                 }
             }
@@ -255,6 +259,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 for: renderedDesktopColorSlotCount
             ),
             showsThinOutline: settings.showsIndicatorOutline,
+            shapeStyle: presentedShapeStyle,
             sizeScale: indicatorSizeScale,
             spacingScale: indicatorSpacingScale,
             horizontalOverflowPadding: StatusItemArtwork.horizontalPadding(
@@ -275,7 +280,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             renderPill(
                 .resting(
                     at: indicatorCenterX(for: index),
-                    sizeScale: indicatorSizeScale
+                    sizeScale: indicatorSizeScale,
+                    shapeStyle: presentedShapeStyle
                 )
             )
         } else {
@@ -330,7 +336,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         else {
             stopPillMotion()
             renderPill(
-                .resting(at: targetX, sizeScale: indicatorSizeScale)
+                .resting(
+                    at: targetX,
+                    sizeScale: indicatorSizeScale,
+                    shapeStyle: presentedShapeStyle
+                )
             )
             return
         }
@@ -338,17 +348,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let sourceX = pillMotion == nil
             ? indicatorCenterX(for: previousIndex)
             : renderedPillFrame?.x ?? indicatorCenterX(for: previousIndex)
+        let activeSize = presentedShapeStyle.activeIndicatorSize(
+            sizeScale: indicatorSizeScale
+        )
         let motion = StatusPillMotion(
             fromX: sourceX,
             toX: targetX,
-            initialWidth: renderedPillFrame?.width ?? 12 * indicatorSizeScale,
-            initialHeight: renderedPillFrame?.height ?? 7 * indicatorSizeScale,
+            initialWidth: renderedPillFrame?.width ?? activeSize.width,
+            initialHeight: renderedPillFrame?.height ?? activeSize.height,
             startTime: CACurrentMediaTime(),
             sizeScale: indicatorSizeScale,
             itemWidth: renderedItemWidth,
-            style: presentedAnimationStyle
+            style: presentedAnimationStyle,
+            shapeStyle: presentedShapeStyle
         )
-        transitionSourceIndex = presentedAnimationStyle == .seamless
+        transitionSourceIndex = presentedAnimationStyle
+            .blendsIndicatorAppearanceDuringTransition
             ? previousIndex
             : nil
         pillMotion = motion
@@ -509,7 +524,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             fromScale: hoverScales[index] ?? CGSize(width: 1, height: 1),
             isHovered: isHovered,
             isActive: index == renderedActiveIndex,
-            startTime: CACurrentMediaTime()
+            startTime: CACurrentMediaTime(),
+            shapeStyle: presentedShapeStyle
         )
 
         guard OrbitMotion.allowsMotion(
@@ -558,7 +574,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 fromScale: CGSize(width: 1, height: 1),
                 isHovered: true,
                 isActive: hoveredIndex == renderedActiveIndex,
-                startTime: CACurrentMediaTime()
+                startTime: CACurrentMediaTime(),
+                shapeStyle: presentedShapeStyle
             )
             hoverScales[hoveredIndex] = hover.targetScale
             renderArtwork()
@@ -636,7 +653,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private var indicatorSizeScale: CGFloat {
-        presentedSizeScale
+        StatusItemArtwork.fittedSizeScale(
+            for: renderedSpaceCount,
+            requestedSizeScale: presentedSizeScale,
+            spacingScale: presentedSpacingScale
+        )
     }
 
     private var indicatorSpacingScale: CGFloat {
@@ -700,6 +721,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         presentedSpacingScale = CGFloat(settings.indicatorSpacingScale)
         presentedAnimationsEnabled = settings.animateIndicator
         presentedAnimationStyle = settings.indicatorAnimationStyle
+        presentedShapeStyle = settings.indicatorShapeStyle
         refreshArtworkForSettings()
     }
 }

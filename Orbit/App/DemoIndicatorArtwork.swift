@@ -15,6 +15,7 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
     let sizeScale: CGFloat
     let spacingScale: CGFloat
     let showsThinOutline: Bool
+    let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
     let reduceMotion: Bool
@@ -48,6 +49,7 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
             sizeScale: sizeScale,
             spacingScale: spacingScale,
             showsThinOutline: showsThinOutline,
+            shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
             reduceMotion: reduceMotion
@@ -65,6 +67,7 @@ final class SyncedIndicatorArtworkView: NSView {
         let sizeScale: CGFloat
         let spacingScale: CGFloat
         let showsThinOutline: Bool
+        let shapeStyle: IndicatorShapeStyle
         let animationsEnabled: Bool
         let animationStyle: IndicatorAnimationStyle
         let reduceMotion: Bool
@@ -151,6 +154,7 @@ final class SyncedIndicatorArtworkView: NSView {
         sizeScale: CGFloat,
         spacingScale: CGFloat,
         showsThinOutline: Bool,
+        shapeStyle: IndicatorShapeStyle,
         animationsEnabled: Bool,
         animationStyle: IndicatorAnimationStyle,
         reduceMotion: Bool
@@ -174,6 +178,7 @@ final class SyncedIndicatorArtworkView: NSView {
             sizeScale: sizeScale,
             spacingScale: spacingScale,
             showsThinOutline: showsThinOutline,
+            shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
             reduceMotion: reduceMotion
@@ -227,6 +232,7 @@ final class SyncedIndicatorArtworkView: NSView {
             sizeScale: presentedConfiguration.sizeScale,
             spacingScale: presentedConfiguration.spacingScale,
             showsThinOutline: newConfiguration.showsThinOutline,
+            shapeStyle: presentedConfiguration.shapeStyle,
             animationsEnabled: presentedConfiguration.animationsEnabled,
             animationStyle: presentedConfiguration.animationStyle,
             reduceMotion: newConfiguration.reduceMotion
@@ -266,6 +272,7 @@ final class SyncedIndicatorArtworkView: NSView {
     ) -> Bool {
         old.animationsEnabled != new.animationsEnabled
             || old.animationStyle != new.animationStyle
+            || old.shapeStyle != new.shapeStyle
     }
 
     private func immediateConfigurationChanged(
@@ -350,6 +357,7 @@ final class SyncedIndicatorArtworkView: NSView {
             indicatorKinds: configuration.indicators,
             indicatorColors: configuration.colors,
             showsThinOutline: configuration.showsThinOutline,
+            shapeStyle: configuration.shapeStyle,
             sizeScale: configuration.sizeScale,
             spacingScale: configuration.spacingScale,
             imageHeight: Self.previewHeight,
@@ -362,7 +370,8 @@ final class SyncedIndicatorArtworkView: NSView {
         renderedPillFrame = configuration.activeIndex.map {
             .resting(
                 at: indicatorCenterX(for: $0),
-                sizeScale: configuration.sizeScale
+                sizeScale: configuration.sizeScale,
+                shapeStyle: configuration.shapeStyle
             )
         }
         hoveredIndex = configuration.hoveredIndex
@@ -409,7 +418,8 @@ final class SyncedIndicatorArtworkView: NSView {
             stopPillMotion()
             renderedPillFrame = .resting(
                 at: targetX,
-                sizeScale: configuration.sizeScale
+                sizeScale: configuration.sizeScale,
+                shapeStyle: configuration.shapeStyle
             )
             renderArtwork()
             return
@@ -418,19 +428,24 @@ final class SyncedIndicatorArtworkView: NSView {
         let sourceX = pillMotion == nil
             ? indicatorCenterX(for: previousIndex)
             : renderedPillFrame?.x ?? indicatorCenterX(for: previousIndex)
+        let activeSize = configuration.shapeStyle.activeIndicatorSize(
+            sizeScale: configuration.sizeScale
+        )
         let motion = StatusPillMotion(
             fromX: sourceX,
             toX: targetX,
             initialWidth: renderedPillFrame?.width
-                ?? 12 * configuration.sizeScale,
+                ?? activeSize.width,
             initialHeight: renderedPillFrame?.height
-                ?? 7 * configuration.sizeScale,
+                ?? activeSize.height,
             startTime: CACurrentMediaTime(),
             sizeScale: configuration.sizeScale,
             itemWidth: renderedItemWidth,
-            style: configuration.animationStyle
+            style: configuration.animationStyle,
+            shapeStyle: configuration.shapeStyle
         )
-        transitionSourceIndex = configuration.animationStyle == .seamless
+        transitionSourceIndex = configuration.animationStyle
+            .blendsIndicatorAppearanceDuringTransition
             ? previousIndex
             : nil
         pillMotion = motion
@@ -466,7 +481,8 @@ final class SyncedIndicatorArtworkView: NSView {
                 ?? CGSize(width: 1, height: 1),
             isHovered: isHovered,
             isActive: index == renderedActiveIndex,
-            startTime: CACurrentMediaTime()
+            startTime: CACurrentMediaTime(),
+            shapeStyle: configuration.shapeStyle
         )
 
         guard OrbitMotion.allowsMotion(

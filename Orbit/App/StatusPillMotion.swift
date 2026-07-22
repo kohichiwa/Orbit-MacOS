@@ -4,21 +4,53 @@ struct StatusPillFrame: Equatable, Sendable {
     let x: CGFloat
     let width: CGFloat
     let height: CGFloat
+    /// Normalized concavity of the liquid bridge. Resting indicators and
+    /// non-continuous transitions keep a regular silhouette with zero waist.
+    let waist: CGFloat
     /// Normalized progress of the current morph. Resting artwork is always 1.
     let progress: CGFloat
     let isComplete: Bool
 
+    nonisolated init(
+        x: CGFloat,
+        width: CGFloat,
+        height: CGFloat,
+        waist: CGFloat = 0,
+        progress: CGFloat,
+        isComplete: Bool
+    ) {
+        self.x = x
+        self.width = width
+        self.height = height
+        self.waist = waist
+        self.progress = progress
+        self.isComplete = isComplete
+    }
+
     nonisolated static func resting(
         at x: CGFloat,
-        sizeScale: CGFloat = 1
+        sizeScale: CGFloat = 1,
+        shapeStyle: IndicatorShapeStyle = .standard
     ) -> Self {
-        Self(
+        let size = shapeStyle.activeIndicatorSize(sizeScale: sizeScale)
+        return Self(
             x: x,
-            width: 12 * sizeScale,
-            height: 7 * sizeScale,
+            width: size.width,
+            height: size.height,
             progress: 1,
             isComplete: true
         )
+    }
+}
+
+extension IndicatorShapeStyle {
+    nonisolated func activeIndicatorSize(sizeScale: CGFloat) -> CGSize {
+        switch self {
+        case .standard, .roundedRectangles:
+            CGSize(width: 12 * sizeScale, height: 7 * sizeScale)
+        case .circles:
+            CGSize(width: 7 * sizeScale, height: 7 * sizeScale)
+        }
     }
 }
 
@@ -136,6 +168,7 @@ struct StatusPillMotion {
     let sizeScale: CGFloat
     let itemWidth: CGFloat
     let style: IndicatorAnimationStyle
+    let shapeStyle: IndicatorShapeStyle
 
     init(
         fromX: CGFloat,
@@ -145,7 +178,8 @@ struct StatusPillMotion {
         startTime: TimeInterval,
         sizeScale: CGFloat = 1,
         itemWidth: CGFloat = StatusItemArtwork.itemWidth,
-        style: IndicatorAnimationStyle = .seamless
+        style: IndicatorAnimationStyle = .seamless,
+        shapeStyle: IndicatorShapeStyle = .standard
     ) {
         self.fromX = fromX
         self.toX = toX
@@ -155,6 +189,7 @@ struct StatusPillMotion {
         self.sizeScale = sizeScale
         self.itemWidth = itemWidth
         self.style = style
+        self.shapeStyle = shapeStyle
 
         let distance = abs(toX - fromX)
         let crossedSpaces = max(distance / itemWidth, 1)
@@ -174,13 +209,23 @@ struct StatusPillMotion {
                     + min(TimeInterval(crossedSpaces - 1) * 0.015, 0.05),
                 OrbitMotion.maximumFeedbackDuration
             )
+        case .continuous:
+            duration = min(
+                OrbitMotion.continuousDuration
+                    + min(TimeInterval(crossedSpaces - 1) * 0.01, 0.04),
+                OrbitMotion.maximumFeedbackDuration
+            )
         }
     }
 
     func frame(at timestamp: TimeInterval) -> StatusPillFrame {
         let rawProgress = CGFloat((timestamp - startTime) / duration)
         if rawProgress >= 0.999_999 {
-            return .resting(at: toX, sizeScale: sizeScale)
+            return .resting(
+                at: toX,
+                sizeScale: sizeScale,
+                shapeStyle: shapeStyle
+            )
         }
         if rawProgress <= 0 {
             return StatusPillFrame(
@@ -208,7 +253,83 @@ struct StatusPillMotion {
                 progress: progress,
                 crossedSpaces: crossedSpaces
             )
+        case .continuous:
+            return continuousFrame(progress: progress)
         }
+    }
+
+    /// Extends the leading edge to the destination before releasing the
+    /// trailing edge. The indicator therefore remains one connected shape
+    /// throughout the entire transition instead of travelling through a gap.
+    private func continuousFrame(progress: CGFloat) -> StatusPillFrame {
+        let activeSize = shapeStyle.activeIndicatorSize(
+            sizeScale: sizeScale
+        )
+        let sourceLeft = fromX - initialWidth / 2
+        let sourceRight = fromX + initialWidth / 2
+        let targetLeft = toX - activeSize.width / 2
+        let targetRight = toX + activeSize.width / 2
+        let leadingProgress = phaseProgress(
+            progress,
+            from: 0,
+            to: 0.62
+        )
+        let trailingProgress = phaseProgress(
+            progress,
+            from: 0.58,
+            to: 1
+        )
+
+        let left: CGFloat
+        let right: CGFloat
+        if toX >= fromX {
+            left = interpolate(sourceLeft, targetLeft, trailingProgress)
+            right = interpolate(sourceRight, targetRight, leadingProgress)
+        } else {
+            left = interpolate(sourceLeft, targetLeft, leadingProgress)
+            right = interpolate(sourceRight, targetRight, trailingProgress)
+        }
+
+        return StatusPillFrame(
+            x: (left + right) / 2,
+            width: max(right - left, 0.5 * sizeScale),
+            height: interpolate(
+                initialHeight,
+                activeSize.height,
+                smootherStep(progress)
+            ),
+            waist: continuousWaist(
+                progress: progress,
+                bridgeWidth: max(right - left, 0)
+            ),
+            progress: progress,
+            isComplete: false
+        )
+    }
+
+    /// The neck appears only after the shape has become a real bridge and
+    /// dissolves before it settles at the destination. A smooth bell curve
+    /// keeps both ends of the morph tangent-continuous.
+    private func continuousWaist(
+        progress: CGFloat,
+        bridgeWidth: CGFloat
+    ) -> CGFloat {
+        let restingWidth = max(
+            initialWidth,
+            shapeStyle.activeIndicatorSize(sizeScale: sizeScale).width
+        )
+        let extensionAmount = smootherStep(
+            min(
+                max(
+                    (bridgeWidth - restingWidth)
+                        / max(itemWidth * 0.72, 0.001),
+                    0
+                ),
+                1
+            )
+        )
+        let bell = sin(.pi * progress)
+        return bell * bell * extensionAmount
     }
 
     private func seamlessFrame(
@@ -216,9 +337,15 @@ struct StatusPillMotion {
         crossedSpaces: CGFloat
     ) -> StatusPillFrame {
         let x = interpolate(fromX, toX, smootherStep(progress))
+        let activeSize = shapeStyle.activeIndicatorSize(
+            sizeScale: sizeScale
+        )
         let travellingWidth = (
-            8.15 + min(crossedSpaces - 1, 4) * 0.25
+            (shapeStyle == .circles ? 7.1 : 8.15)
+                + min(crossedSpaces - 1, 4) * 0.25
         ) * sizeScale
+        let overshootWidth = (shapeStyle == .circles ? 7.6 : 12.75)
+            * sizeScale
 
         return StatusPillFrame(
             x: x,
@@ -228,8 +355,8 @@ struct StatusPillMotion {
                     initialWidth,
                     4.9 * sizeScale,
                     travellingWidth,
-                    12.75 * sizeScale,
-                    12 * sizeScale
+                    overshootWidth,
+                    activeSize.width
                 ]
             ),
             height: seamlessValue(
@@ -239,7 +366,7 @@ struct StatusPillMotion {
                     4.9 * sizeScale,
                     4.55 * sizeScale,
                     7.35 * sizeScale,
-                    7 * sizeScale
+                    activeSize.height
                 ]
             ),
             progress: progress,
@@ -251,9 +378,15 @@ struct StatusPillMotion {
         progress: CGFloat,
         crossedSpaces: CGFloat
     ) -> StatusPillFrame {
+        let activeSize = shapeStyle.activeIndicatorSize(
+            sizeScale: sizeScale
+        )
         let stretchedWidth = (
-            16.6 + min(crossedSpaces - 1, 4) * 0.35
+            (shapeStyle == .circles ? 12.8 : 16.6)
+                + min(crossedSpaces - 1, 4) * 0.35
         ) * sizeScale
+        let settlingWidth = (shapeStyle == .circles ? 7.5 : 10.9)
+            * sizeScale
         return StatusPillFrame(
             x: interpolate(fromX, toX, classicPositionProgress(progress)),
             width: classicValue(
@@ -261,8 +394,8 @@ struct StatusPillMotion {
                 values: [
                     initialWidth,
                     stretchedWidth,
-                    10.9 * sizeScale,
-                    12 * sizeScale
+                    settlingWidth,
+                    activeSize.width
                 ]
             ),
             height: classicValue(
@@ -271,7 +404,7 @@ struct StatusPillMotion {
                     initialHeight,
                     6.15 * sizeScale,
                     7.35 * sizeScale,
-                    7 * sizeScale
+                    activeSize.height
                 ]
             ),
             progress: progress,
@@ -405,6 +538,14 @@ struct StatusPillMotion {
             * (clamped * (clamped * 6 - 15) + 10)
     }
 
+    private func phaseProgress(
+        _ progress: CGFloat,
+        from start: CGFloat,
+        to end: CGFloat
+    ) -> CGFloat {
+        smootherStep((progress - start) / (end - start))
+    }
+
     private func interpolate(
         _ start: CGFloat,
         _ end: CGFloat,
@@ -439,7 +580,8 @@ struct StatusHoverMotion {
         fromScale: CGSize,
         isHovered: Bool,
         isActive: Bool,
-        startTime: TimeInterval
+        startTime: TimeInterval,
+        shapeStyle: IndicatorShapeStyle = .standard
     ) {
         self.index = index
         self.fromScale = fromScale
@@ -449,11 +591,21 @@ struct StatusHoverMotion {
             duration = OrbitMotion.hoverEnterDuration
             peakTime = 0.68
             if isActive {
-                targetScale = CGSize(width: 1.38, height: 1.25)
-                peakScale = CGSize(
-                    width: Self.maximumHorizontalScale,
-                    height: 1.22
-                )
+                if shapeStyle == .circles {
+                    targetScale = CGSize(width: 1.32, height: 1.32)
+                    peakScale = CGSize(width: 1.38, height: 1.38)
+                } else {
+                    targetScale = CGSize(width: 1.38, height: 1.25)
+                    peakScale = CGSize(
+                        width: Self.maximumHorizontalScale,
+                        height: 1.22
+                    )
+                }
+            } else if shapeStyle == .circles {
+                let target = 7.75 / StatusItemArtwork.dotDiameter
+                let peak = 8 / StatusItemArtwork.dotDiameter
+                targetScale = CGSize(width: target, height: target)
+                peakScale = CGSize(width: peak, height: peak)
             } else {
                 targetScale = CGSize(
                     width: 11.75 / StatusItemArtwork.dotDiameter,
@@ -469,7 +621,11 @@ struct StatusHoverMotion {
             peakTime = 0.86
             targetScale = CGSize(width: 1, height: 1)
             if isActive {
-                peakScale = CGSize(width: 0.99, height: 1.02)
+                peakScale = shapeStyle == .circles
+                    ? CGSize(width: 1.01, height: 1.01)
+                    : CGSize(width: 0.99, height: 1.02)
+            } else if shapeStyle == .circles {
+                peakScale = CGSize(width: 1.02, height: 1.02)
             } else {
                 peakScale = CGSize(
                     width: 4.35 / StatusItemArtwork.dotDiameter,

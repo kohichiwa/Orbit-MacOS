@@ -119,11 +119,12 @@ private struct SettingsRootView: View {
                     sizeScale: settings.indicatorSizeScale,
                     spacingScale: settings.indicatorSpacingScale,
                     showsThinOutline: settings.showsIndicatorOutline,
+                    shapeStyle: settings.indicatorShapeStyle,
                     animationsEnabled: settings.animateIndicator,
                     animationStyle: settings.indicatorAnimationStyle,
                     setColor: settings.setIndicatorColor
                 )
-                .frame(height: 218)
+                .frame(height: SettingsSurfaceMetrics.demoHeight)
                 .ignoresSafeArea(.container, edges: .top)
 
                 SettingsControls(settings: settings)
@@ -135,13 +136,23 @@ private struct SettingsRootView: View {
     }
 }
 
+private enum SettingsSurfaceMetrics {
+    static let demoHeight: CGFloat = 218
+    static let transparentHeight: CGFloat = 180
+    static let gradientHeight: CGFloat = 110
+    static let demoSwipeBottomExtension = max(
+        transparentHeight + gradientHeight - demoHeight,
+        0
+    )
+}
+
 private struct SettingsSurfaceBackground: View {
     private let opaqueBackground = Color(nsColor: .windowBackgroundColor)
 
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
-                .frame(height: 180)
+                .frame(height: SettingsSurfaceMetrics.transparentHeight)
 
             LinearGradient(
                 colors: [
@@ -157,7 +168,7 @@ private struct SettingsSurfaceBackground: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 110)
+            .frame(height: SettingsSurfaceMetrics.gradientHeight)
 
             opaqueBackground
         }
@@ -170,7 +181,7 @@ private struct SettingsControls: View {
     @ObservedObject var settings: AppSettings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     SettingsSectionTitle(
@@ -205,6 +216,10 @@ private struct SettingsControls: View {
                             set: { settings.setIndicatorSpacingScale($0) }
                         ),
                         steps: AppSettings.indicatorSpacingSteps
+                    )
+
+                    ShapeStyleRow(
+                        selection: $settings.indicatorShapeStyle
                     )
 
                     SettingsToggleRow(
@@ -249,8 +264,7 @@ private struct SettingsControls: View {
             }
         }
         .padding(.horizontal, 24)
-        .padding(.top, 16)
-        .padding(.bottom, 16)
+        .padding(.vertical, 12)
     }
 }
 
@@ -348,6 +362,132 @@ private struct AnimationStyleRow: View {
     }
 }
 
+private struct ShapeStyleRow: View {
+    @Binding var selection: IndicatorShapeStyle
+
+    var body: some View {
+        HStack(spacing: SettingsGridMetrics.columnSpacing) {
+            SettingsRowLabel(title: "Форма")
+            ShapeStyleSelector(selection: $selection)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(height: 42)
+    }
+}
+
+private struct ShapeStyleSelector: View {
+    @Binding var selection: IndicatorShapeStyle
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hoveredStyle: IndicatorShapeStyle?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(IndicatorShapeStyle.allCases) { style in
+                Button {
+                    selection = style
+                } label: {
+                    HStack(spacing: 6) {
+                        shapePreview(for: style)
+                            .accessibilityHidden(true)
+                        Text(style.title)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.84)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(backgroundColor(for: style))
+                            .overlay {
+                                RoundedRectangle(
+                                    cornerRadius: 8,
+                                    style: .continuous
+                                )
+                                .strokeBorder(
+                                    borderColor(for: style),
+                                    lineWidth: 1
+                                )
+                            }
+                    }
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    hoveredStyle = hovering ? style : nil
+                }
+                .accessibilityLabel("Форма индикаторов: \(style.title)")
+                .accessibilityAddTraits(
+                    selection == style ? .isSelected : []
+                )
+            }
+        }
+        .animation(
+            OrbitMotion.selectionHover(reduceMotion: reduceMotion),
+            value: hoveredStyle
+        )
+        .animation(
+            OrbitMotion.selectionChange(reduceMotion: reduceMotion),
+            value: selection
+        )
+    }
+
+    @ViewBuilder
+    private func shapePreview(for style: IndicatorShapeStyle) -> some View {
+        switch style {
+        case .standard:
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 5, height: 5)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 13, height: 7)
+            }
+            .frame(width: 23, height: 10)
+        case .circles:
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 5, height: 5)
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 8, height: 8)
+            }
+            .frame(width: 23, height: 10)
+        case .roundedRectangles:
+            HStack(spacing: 3) {
+                RoundedRectangle(cornerRadius: 1.4, style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 6, height: 6)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 13, height: 7)
+            }
+            .frame(width: 23, height: 10)
+        }
+    }
+
+    private func previewColor(for style: IndicatorShapeStyle) -> Color {
+        selection == style ? .accentColor : .secondary
+    }
+
+    private func backgroundColor(for style: IndicatorShapeStyle) -> Color {
+        if selection == style {
+            return Color.accentColor.opacity(0.13)
+        }
+        return Color.primary.opacity(hoveredStyle == style ? 0.065 : 0.025)
+    }
+
+    private func borderColor(for style: IndicatorShapeStyle) -> Color {
+        selection == style
+            ? Color.accentColor.opacity(0.28)
+            : Color.primary.opacity(hoveredStyle == style ? 0.12 : 0.07)
+    }
+}
+
 private struct AnimationStyleSelector: View {
     @Binding var selection: IndicatorAnimationStyle
     let isEnabled: Bool
@@ -362,14 +502,13 @@ private struct AnimationStyleSelector: View {
                     selection = style
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: symbol(for: style))
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(
-                                selection == style ? Color.accentColor : .secondary
-                            )
+                        animationPreview(for: style)
+                            .accessibilityHidden(true)
                         Text(style.title)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.84)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
@@ -379,7 +518,10 @@ private struct AnimationStyleSelector: View {
                             .fill(backgroundColor(for: style))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(borderColor(for: style), lineWidth: 1)
+                                    .strokeBorder(
+                                        borderColor(for: style),
+                                        lineWidth: 1
+                                    )
                             }
                     }
                 }
@@ -394,22 +536,63 @@ private struct AnimationStyleSelector: View {
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.45)
         .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.14),
+            OrbitMotion.selectionHover(reduceMotion: reduceMotion),
             value: hoveredStyle
         )
         .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.18),
+            OrbitMotion.selectionChange(reduceMotion: reduceMotion),
             value: selection
         )
     }
 
-    private func symbol(for style: IndicatorAnimationStyle) -> String {
+    @ViewBuilder
+    private func animationPreview(
+        for style: IndicatorAnimationStyle
+    ) -> some View {
         switch style {
         case .seamless:
-            "waveform.path"
+            HStack(spacing: 2) {
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 4, height: 4)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style).opacity(0.68))
+                    .frame(width: 6, height: 5)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 9, height: 6)
+            }
+            .frame(width: 23, height: 10)
+        case .continuous:
+            ZStack {
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style).opacity(0.32))
+                    .frame(width: 19, height: 5)
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 7, height: 7)
+                    .offset(x: -6)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 12, height: 7)
+                    .offset(x: 5)
+            }
+            .frame(width: 23, height: 10)
         case .classic:
-            "circle"
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 6, height: 6)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 11, height: 6)
+            }
+            .frame(width: 23, height: 10)
         }
+    }
+
+    private func previewColor(for style: IndicatorAnimationStyle) -> Color {
+        selection == style ? .accentColor : .secondary
     }
 
     private func backgroundColor(
@@ -432,17 +615,21 @@ private struct DemoVisualConfiguration: Equatable {
     let sizeScale: Double
     let spacingScale: Double
     let showsThinOutline: Bool
+    let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
 }
 
 private struct InteractiveDemoZone: View {
+    private static let maximumArtworkWidth: CGFloat = 484
+
     let indicators: [SpaceIndicatorKind]
     let currentActiveIndex: Int?
     let colors: [NSColor]
     let sizeScale: Double
     let spacingScale: Double
     let showsThinOutline: Bool
+    let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
     let setColor: (NSColor, Int) -> Void
@@ -482,6 +669,7 @@ private struct InteractiveDemoZone: View {
                         sizeScale: demoScale,
                         spacingScale: CGFloat(configuration.spacingScale),
                         showsThinOutline: configuration.showsThinOutline,
+                        shapeStyle: configuration.shapeStyle,
                         animationsEnabled: configuration.animationsEnabled,
                         animationStyle: configuration.animationStyle,
                         reduceMotion: reduceMotion
@@ -514,6 +702,7 @@ private struct InteractiveDemoZone: View {
                 }
                 .frame(width: demoArtworkWidth, height: 45)
                 .offset(y: 26)
+                .popupClickProtected()
             }
 
             if let paletteIndex, indicators.indices.contains(paletteIndex) {
@@ -533,14 +722,16 @@ private struct InteractiveDemoZone: View {
                     x: paletteHorizontalOffset(for: paletteIndex),
                     y: -20
                 )
-                .transition(.liquidPalette)
+                .popupClickProtected()
+                .transition(paletteTransition)
                 .zIndex(20)
             }
 
             HStack(alignment: .top, spacing: 4) {
                 if isInfoPresented {
                     DemoInfoBubble()
-                        .transition(.liquidPalette)
+                        .popupClickProtected()
+                        .transition(paletteTransition)
                 }
 
                 Button {
@@ -569,6 +760,7 @@ private struct InteractiveDemoZone: View {
                 .buttonStyle(.plain)
                 .padding(.top, 8)
                 .onHover { isInfoHovered = $0 }
+                .popupClickProtected()
                 .accessibilityLabel("Справка по демонстрации")
                 .accessibilityValue(
                     isInfoPresented ? "Открыта" : "Закрыта"
@@ -583,14 +775,18 @@ private struct InteractiveDemoZone: View {
             )
             .animation(paletteSpring, value: isInfoPresented)
             .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.14),
+                OrbitMotion.selectionHover(reduceMotion: reduceMotion),
                 value: isInfoHovered
             )
             .zIndex(30)
 
-            TrackpadSwipeMonitor { direction in
+            TrackpadSwipeMonitor(
+                bottomExtension:
+                    SettingsSurfaceMetrics.demoSwipeBottomExtension
+            ) { direction in
                 moveActive(by: direction)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(false)
         }
         .contentShape(Rectangle())
@@ -627,10 +823,25 @@ private struct InteractiveDemoZone: View {
                 self.paletteIndex = nil
             }
         }
+        .overlayPreferenceValue(PopupClickProtectedKey.self) { anchors in
+            GeometryReader { proxy in
+                PopupOutsideClickMonitor(
+                    isPresented: paletteIndex != nil || isInfoPresented,
+                    protectedRects: anchors.map { proxy[$0] },
+                    dismiss: dismissPopups
+                )
+                .allowsHitTesting(false)
+            }
+        }
     }
 
     private var demoScale: CGFloat {
-        CGFloat(configuration.sizeScale) * 2.15
+        let requestedScale = CGFloat(configuration.sizeScale) * 2.15
+        let requestedWidth = demoArtworkWidth(for: requestedScale)
+        guard requestedWidth > Self.maximumArtworkWidth else {
+            return requestedScale
+        }
+        return requestedScale * Self.maximumArtworkWidth / requestedWidth
     }
 
     private var demoItemWidth: CGFloat {
@@ -640,14 +851,17 @@ private struct InteractiveDemoZone: View {
         )
     }
 
-    private var demoStripWidth: CGFloat {
-        CGFloat(indicators.count) * demoItemWidth
+    private var demoArtworkWidth: CGFloat {
+        demoArtworkWidth(for: demoScale)
     }
 
-    private var demoArtworkWidth: CGFloat {
-        demoStripWidth
+    private func demoArtworkWidth(for sizeScale: CGFloat) -> CGFloat {
+        CGFloat(indicators.count) * StatusItemArtwork.itemWidth(
+            sizeScale: sizeScale,
+            spacingScale: CGFloat(configuration.spacingScale)
+        )
             + SyncedIndicatorArtworkView.horizontalOverflowPadding(
-                for: demoScale,
+                for: sizeScale,
                 spacingScale: CGFloat(configuration.spacingScale)
             ) * 2
     }
@@ -657,6 +871,10 @@ private struct InteractiveDemoZone: View {
             enabled: configuration.animationsEnabled,
             reduceMotion: reduceMotion
         )
+    }
+
+    private var paletteTransition: AnyTransition {
+        reduceMotion ? .opacity : .liquidPalette
     }
 
     private var glowAnimation: Animation? {
@@ -672,6 +890,7 @@ private struct InteractiveDemoZone: View {
             sizeScale: sizeScale,
             spacingScale: spacingScale,
             showsThinOutline: showsThinOutline,
+            shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle
         )
@@ -776,6 +995,15 @@ private struct InteractiveDemoZone: View {
         withAnimation(paletteSpring) {
             paletteIndex = nil
             isInfoPresented.toggle()
+        }
+    }
+
+    private func dismissPopups() {
+        guard paletteIndex != nil || isInfoPresented else { return }
+        paletteRequestID = UUID()
+        withAnimation(paletteSpring) {
+            paletteIndex = nil
+            isInfoPresented = false
         }
     }
 
@@ -956,13 +1184,7 @@ private struct IndicatorColorPalette: View {
         .padding(.horizontal, 14)
         .frame(height: 39)
         .padding(.bottom, 9)
-        .background(.regularMaterial, in: PaletteBubbleShape())
-        .overlay {
-            PaletteBubbleShape()
-                .stroke(.separator.opacity(0.5), lineWidth: 0.5)
-        }
-        .compositingGroup()
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+        .stableBubbleSurface(PaletteBubbleShape())
         .fixedSize()
     }
 
@@ -978,14 +1200,39 @@ private struct DemoInfoBubble: View {
             .padding(.trailing, 20)
             .padding(.vertical, 12)
             .frame(width: 224, alignment: .leading)
-            .background(.regularMaterial, in: InfoBubbleShape())
+            .stableBubbleSurface(InfoBubbleShape())
+            .accessibilityElement(children: .combine)
+    }
+}
+
+private struct StableBubbleSurface<Surface: Shape>: ViewModifier {
+    let surface: Surface
+
+    func body(content: Content) -> some View {
+        content
+            .background(.regularMaterial, in: surface)
             .overlay {
-                InfoBubbleShape()
-                    .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                surface
+                    .stroke(
+                        Color.primary.opacity(0.13),
+                        style: StrokeStyle(
+                            lineWidth: 1,
+                            lineCap: .round,
+                            lineJoin: .round
+                        )
+                    )
+                    .allowsHitTesting(false)
             }
             .compositingGroup()
             .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
-            .accessibilityElement(children: .combine)
+    }
+}
+
+private extension View {
+    func stableBubbleSurface<Surface: Shape>(
+        _ surface: Surface
+    ) -> some View {
+        modifier(StableBubbleSurface(surface: surface))
     }
 }
 
@@ -1000,7 +1247,6 @@ private struct LiquidPaletteModifier: ViewModifier {
                 anchor: .bottom
             )
             .offset(y: (1 - progress) * 8)
-            .blur(radius: (1 - progress) * 0.5)
             .opacity(progress)
     }
 }
@@ -1157,6 +1403,150 @@ private struct PaletteBubbleShape: Shape {
     }
 }
 
+private struct PopupClickProtectedKey: PreferenceKey {
+    static let defaultValue: [Anchor<CGRect>] = []
+
+    static func reduce(
+        value: inout [Anchor<CGRect>],
+        nextValue: () -> [Anchor<CGRect>]
+    ) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+private extension View {
+    func popupClickProtected() -> some View {
+        anchorPreference(
+            key: PopupClickProtectedKey.self,
+            value: .bounds
+        ) { [$0] }
+    }
+}
+
+enum PopupDismissalPolicy {
+    nonisolated static func shouldDismiss(
+        clickPoint: CGPoint,
+        protectedRects: [CGRect],
+        hitSlop: CGFloat = 4
+    ) -> Bool {
+        !protectedRects.contains { rect in
+            rect.insetBy(dx: -hitSlop, dy: -hitSlop)
+                .contains(clickPoint)
+        }
+    }
+}
+
+private struct PopupOutsideClickMonitor: NSViewRepresentable {
+    let isPresented: Bool
+    let protectedRects: [CGRect]
+    let dismiss: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(dismiss: dismiss)
+    }
+
+    func makeNSView(context: Context) -> MonitoringView {
+        let view = MonitoringView(frame: .zero)
+        context.coordinator.view = view
+        context.coordinator.startMonitoring()
+        return view
+    }
+
+    func updateNSView(_ view: MonitoringView, context: Context) {
+        context.coordinator.view = view
+        context.coordinator.isPresented = isPresented
+        context.coordinator.protectedRects = protectedRects
+        context.coordinator.dismiss = dismiss
+    }
+
+    static func dismantleNSView(
+        _ view: MonitoringView,
+        coordinator: Coordinator
+    ) {
+        coordinator.stopMonitoring()
+    }
+
+    final class MonitoringView: NSView {
+        override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        weak var view: MonitoringView?
+        var isPresented = false
+        var protectedRects: [CGRect] = []
+        var dismiss: () -> Void
+        private var eventMonitor: Any?
+
+        init(dismiss: @escaping () -> Void) {
+            self.dismiss = dismiss
+            super.init()
+        }
+
+        func startMonitoring() {
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self] event in
+                self?.handle(event)
+                return event
+            }
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleWindowResignation(_:)),
+                name: NSWindow.didResignKeyNotification,
+                object: nil,
+            )
+        }
+
+        func stopMonitoring() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
+            eventMonitor = nil
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didResignKeyNotification,
+                object: nil
+            )
+        }
+
+        private func handle(_ event: NSEvent) {
+            guard
+                isPresented,
+                let view,
+                let window = view.window,
+                event.window === window
+            else { return }
+            let point = view.convert(event.locationInWindow, from: nil)
+            guard PopupDismissalPolicy.shouldDismiss(
+                clickPoint: point,
+                protectedRects: protectedRects
+            ) else { return }
+
+            DispatchQueue.main.async { [weak self] in
+                guard self?.isPresented == true else { return }
+                self?.dismiss()
+            }
+        }
+
+        @objc private func handleWindowResignation(
+            _ notification: Notification
+        ) {
+            guard
+                isPresented,
+                let view,
+                notification.object as? NSWindow === view.window
+            else { return }
+            dismiss()
+        }
+    }
+}
+
 private struct PrimarySecondaryClickTarget: NSViewRepresentable {
     let action: () -> Void
     let onHover: (Bool) -> Void
@@ -1230,36 +1620,74 @@ private struct PrimarySecondaryClickTarget: NSViewRepresentable {
     }
 }
 
+enum DemoSwipeRegionPolicy {
+    nonisolated static func contains(
+        _ point: CGPoint,
+        in bounds: CGRect,
+        bottomExtension: CGFloat
+    ) -> Bool {
+        CGRect(
+            x: bounds.minX,
+            y: bounds.minY,
+            width: bounds.width,
+            height: bounds.height + max(bottomExtension, 0)
+        ).contains(point)
+    }
+}
+
 private struct TrackpadSwipeMonitor: NSViewRepresentable {
+    let bottomExtension: CGFloat
     let onSwipe: (Int) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onSwipe: onSwipe) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            bottomExtension: bottomExtension,
+            onSwipe: onSwipe
+        )
+    }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
+    func makeNSView(context: Context) -> MonitoringView {
+        let view = MonitoringView(frame: .zero)
         context.coordinator.view = view
         context.coordinator.startMonitoring()
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: MonitoringView, context: Context) {
         context.coordinator.view = view
+        context.coordinator.bottomExtension = bottomExtension
         context.coordinator.onSwipe = onSwipe
     }
 
-    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+    static func dismantleNSView(
+        _ view: MonitoringView,
+        coordinator: Coordinator
+    ) {
         coordinator.stopMonitoring()
+    }
+
+    final class MonitoringView: NSView {
+        override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
     }
 
     @MainActor
     final class Coordinator {
-        weak var view: NSView?
+        weak var view: MonitoringView?
+        var bottomExtension: CGFloat = 0
         var onSwipe: (Int) -> Void
         private var monitor: Any?
         private var accumulatedDelta: CGFloat = 0
         private var didTrigger = false
 
-        init(onSwipe: @escaping (Int) -> Void) {
+        init(
+            bottomExtension: CGFloat,
+            onSwipe: @escaping (Int) -> Void
+        ) {
+            self.bottomExtension = bottomExtension
             self.onSwipe = onSwipe
         }
 
@@ -1282,8 +1710,10 @@ private struct TrackpadSwipeMonitor: NSViewRepresentable {
                 event.hasPreciseScrollingDeltas,
                 let view,
                 event.window === view.window,
-                view.bounds.contains(
-                    view.convert(event.locationInWindow, from: nil)
+                DemoSwipeRegionPolicy.contains(
+                    view.convert(event.locationInWindow, from: nil),
+                    in: view.bounds,
+                    bottomExtension: bottomExtension
                 ),
                 abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
             else { return }

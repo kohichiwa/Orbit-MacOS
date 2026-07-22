@@ -5,6 +5,9 @@ enum StatusItemArtwork {
     nonisolated static let horizontalPadding: CGFloat = 4
     nonisolated static let imageHeight: CGFloat = 22
     nonisolated static let dotDiameter: CGFloat = 4.5
+    /// Keeps a crowded status item from being evicted by macOS when the user
+    /// creates many Spaces. Regular configurations retain their exact size.
+    nonisolated static let maximumStatusItemWidth: CGFloat = 168
 
     nonisolated static func itemWidth(
         sizeScale: CGFloat,
@@ -30,6 +33,24 @@ enum StatusItemArtwork {
             sizeScale: sizeScale,
             spacingScale: spacingScale
         ) + horizontalPadding(sizeScale: sizeScale) * 2
+    }
+
+    nonisolated static func fittedSizeScale(
+        for count: Int,
+        requestedSizeScale: CGFloat,
+        spacingScale: CGFloat,
+        maximumWidth: CGFloat = maximumStatusItemWidth
+    ) -> CGFloat {
+        let requestedSizeScale = max(requestedSizeScale, 0.01)
+        let unitWidth = preferredWidth(
+            for: count,
+            sizeScale: 1,
+            spacingScale: spacingScale
+        )
+        guard unitWidth > 0, maximumWidth > 0 else {
+            return requestedSizeScale
+        }
+        return min(requestedSizeScale, maximumWidth / unitWidth)
     }
 
     nonisolated static func centerX(
