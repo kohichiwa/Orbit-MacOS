@@ -14,7 +14,12 @@ struct StatusItemView: View {
         .padding(.horizontal, 4)
         .frame(height: 22)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Рабочие столы")
+        .accessibilityLabel(
+            OrbitL10n.text(
+                "accessibility.desktops",
+                fallback: "Desktops"
+            )
+        )
     }
 
     static func preferredWidth(for count: Int) -> CGFloat {
@@ -181,8 +186,21 @@ private struct SpaceDotButton: View {
         }
         .buttonStyle(PressedButtonStyle(scale: 0.97))
         .onHover { isHovered = $0 }
-        .accessibilityLabel("Рабочий стол \(index + 1)")
-        .accessibilityValue(isActive ? "Выбран" : "Не выбран")
+        .accessibilityLabel(
+            OrbitL10n.format(
+                "accessibility.desktop",
+                fallback: "Desktop %lld",
+                index + 1
+            )
+        )
+        .accessibilityValue(
+            OrbitL10n.text(
+                isActive
+                    ? "accessibility.desktop.selected"
+                    : "accessibility.desktop.unselected",
+                fallback: isActive ? "Selected" : "Not selected"
+            )
+        )
         .animation(
             OrbitMotion.press(reduceMotion: reduceMotion),
             value: isActive

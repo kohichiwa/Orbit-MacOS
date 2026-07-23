@@ -20,6 +20,7 @@ final class SpaceViewModel: ObservableObject {
     private var snapshot: SpaceSnapshot?
     private var pendingTargetIdentifier: Int64?
     private var refreshTask: Task<Void, Never>?
+    private var refreshGeneration: UInt = 0
     private var fullscreenColorIndices: [Int64: Int] = [:]
 
     init(
@@ -50,19 +51,33 @@ final class SpaceViewModel: ObservableObject {
 
     func start() {
         reader.start { [weak self] in self?.systemSpaceDidChange() }
-        Task { await refresh() }
+        scheduleRefresh()
     }
 
     func stop() {
+        refreshGeneration &+= 1
         refreshTask?.cancel()
         refreshTask = nil
         reader.stop()
     }
 
     func refresh() async {
+        refreshTask?.cancel()
+        let generation = nextRefreshGeneration()
+        await performRefresh(generation: generation)
+    }
+
+    private func performRefresh(generation: UInt) async {
         canPostEvents = controller.canPostEvents
-        guard let newSnapshot = await reader.read() else {
-            message = "Не удалось прочитать список рабочих столов macOS."
+        let newSnapshot = await reader.read()
+        guard isCurrentRefresh(generation) else { return }
+        guard let newSnapshot else {
+            publishMessage(
+                OrbitL10n.text(
+                "error.desktopList.unavailable",
+                fallback: "Couldn't read the macOS desktop list."
+                )
+            )
             return
         }
         apply(newSnapshot, preservingPendingSelection: isSwitching)
@@ -81,9 +96,16 @@ final class SpaceViewModel: ObservableObject {
         let targetIdentifier = snapshot.orderedIdentifiers[index]
         guard targetIdentifier != snapshot.activeIdentifier else { return }
 
+        refreshGeneration &+= 1
+        refreshTask?.cancel()
+        refreshTask = nil
+
         canPostEvents = controller.canPostEvents
         guard canPostEvents else {
-            message = "Orbit не может отправить системное сочетание. Разрешите управление в контекстном меню."
+            message = OrbitL10n.text(
+                "error.spaceSwitch.permissionRequired",
+                fallback: "Orbit can't send the system shortcut. Allow control in the context menu."
+            )
             return
         }
 
@@ -155,26 +177,20 @@ final class SpaceViewModel: ObservableObject {
     private func finishSwitch(with newSnapshot: SpaceSnapshot) {
         let newSnapshot = assigningFullscreenColors(in: newSnapshot)
         pendingTargetIdentifier = nil
-        snapshot = newSnapshot
-        spaceCount = newSnapshot.count
-        indicatorKinds = newSnapshot.indicatorKinds
-        indicators = newSnapshot.indicators
-        activeIndex = newSnapshot.activeIndex
+        publishStructure(from: newSnapshot)
+        publishActiveIndex(newSnapshot.activeIndex)
         isSwitching = false
-        message = nil
+        publishMessage(nil)
     }
 
     private func reconcileAfterFailure() async {
         pendingTargetIdentifier = nil
         if let actual = await reader.read(), actual.activeIdentifier != nil {
             let actual = assigningFullscreenColors(in: actual)
-            snapshot = actual
-            spaceCount = actual.count
-            indicatorKinds = actual.indicatorKinds
-            indicators = actual.indicators
-            activeIndex = actual.activeIndex
+            publishStructure(from: actual)
+            publishActiveIndex(actual.activeIndex)
         } else {
-            activeIndex = snapshot?.activeIndex
+            publishActiveIndex(snapshot?.activeIndex)
         }
         isSwitching = false
     }
@@ -184,12 +200,15 @@ final class SpaceViewModel: ObservableObject {
         let previousIdentifier = snapshot?.activeIdentifier
         let previousIndicators = snapshot?.indicators
         refreshTask?.cancel()
+        let generation = nextRefreshGeneration()
         refreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for attempt in 0..<12 {
-                if Task.isCancelled { return }
+                guard self.isCurrentRefresh(generation) else { return }
                 if attempt > 0 { try? await Task.sleep(for: .milliseconds(70)) }
+                guard self.isCurrentRefresh(generation) else { return }
                 guard let candidate = await self.reader.read() else { continue }
+                guard self.isCurrentRefresh(generation) else { return }
                 guard candidate.activeIdentifier != nil else { continue }
                 if candidate.activeIdentifier != previousIdentifier
                     || candidate.indicators != previousIndicators {
@@ -207,10 +226,7 @@ final class SpaceViewModel: ObservableObject {
         guard newSnapshot.activeIdentifier != nil else { return }
         let newSnapshot = assigningFullscreenColors(in: newSnapshot)
 
-        snapshot = newSnapshot
-        spaceCount = newSnapshot.count
-        indicatorKinds = newSnapshot.indicatorKinds
-        indicators = newSnapshot.indicators
+        publishStructure(from: newSnapshot)
 
         if preservingPendingSelection,
            let pendingTargetIdentifier,
@@ -218,11 +234,54 @@ final class SpaceViewModel: ObservableObject {
             return
         }
 
-        activeIndex = newSnapshot.activeIndex
+        publishActiveIndex(newSnapshot.activeIndex)
         if newSnapshot.activeIdentifier == pendingTargetIdentifier {
             self.pendingTargetIdentifier = nil
         }
-        message = nil
+        publishMessage(nil)
+    }
+
+    private func scheduleRefresh() {
+        refreshTask?.cancel()
+        let generation = nextRefreshGeneration()
+        refreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRefresh(generation: generation)
+        }
+    }
+
+    private func nextRefreshGeneration() -> UInt {
+        refreshGeneration &+= 1
+        return refreshGeneration
+    }
+
+    private func isCurrentRefresh(_ generation: UInt) -> Bool {
+        !Task.isCancelled && generation == refreshGeneration
+    }
+
+    private func publishStructure(from newSnapshot: SpaceSnapshot) {
+        snapshot = newSnapshot
+        if spaceCount != newSnapshot.count {
+            spaceCount = newSnapshot.count
+        }
+        if indicatorKinds != newSnapshot.indicatorKinds {
+            indicatorKinds = newSnapshot.indicatorKinds
+        }
+        if indicators != newSnapshot.indicators {
+            indicators = newSnapshot.indicators
+        }
+    }
+
+    private func publishActiveIndex(_ newValue: Int?) {
+        if activeIndex != newValue {
+            activeIndex = newValue
+        }
+    }
+
+    private func publishMessage(_ newValue: String?) {
+        if message != newValue {
+            message = newValue
+        }
     }
 
     private func assigningFullscreenColors(
@@ -311,9 +370,15 @@ private enum SpaceSwitchError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .targetUnavailable:
-            "macOS изменила порядок рабочих столов. Повторите нажатие."
+            OrbitL10n.text(
+                "error.spaceSwitch.targetUnavailable",
+                fallback: "macOS changed the desktop order. Try again."
+            )
         case .systemDidNotSwitch:
-            "macOS не выполнила Control+←/→. Проверьте сочетания Mission Control в настройках клавиатуры."
+            OrbitL10n.text(
+                "error.spaceSwitch.systemDidNotSwitch",
+                fallback: "macOS didn't perform Control+Left/Right. Check the Mission Control shortcuts in Keyboard settings."
+            )
         }
     }
 }

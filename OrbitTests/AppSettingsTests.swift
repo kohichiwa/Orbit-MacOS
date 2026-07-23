@@ -47,7 +47,115 @@ final class AppSettingsTests: XCTestCase {
         }
         XCTAssertEqual(visualEffect.blendingMode, .behindWindow)
         XCTAssertEqual(visualEffect.material, .underWindowBackground)
+        XCTAssertEqual(visualEffect.state, .followsWindowActiveState)
         XCTAssertEqual(visualEffect.alphaValue, 1)
+        XCTAssertEqual(window.frameAutosaveName, "OrbitSettingsWindow")
+        XCTAssertTrue(
+            window.standardWindowButton(.miniaturizeButton)?.isHidden == true
+        )
+        XCTAssertTrue(window.standardWindowButton(.zoomButton)?.isHidden == true)
+        contentView.layoutSubtreeIfNeeded()
+        let sliders = sliders(in: contentView)
+        XCTAssertEqual(sliders.count, 2)
+        for slider in sliders {
+            XCTAssertEqual(slider.numberOfTickMarks, 9)
+            XCTAssertTrue(slider.allowsTickMarkValuesOnly)
+            XCTAssertFalse((slider.accessibilityLabel() ?? "").isEmpty)
+            XCTAssertFalse((slider.accessibilityValue() as? String ?? "").isEmpty)
+        }
+    }
+
+    func testSettingsPreviewResourcesFollowWindowVisibility() async {
+        let suiteName = "OrbitTests.settings.lifecycle.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = AppSettings(defaults: defaults)
+        let viewModel = SpaceViewModel(
+            colorAssignments: settings,
+            previewSnapshot: SpaceSnapshot(
+                identifiers: [11, 12, 13],
+                activeIndex: 1
+            )
+        )
+        let controller = SettingsWindowController(
+            settings: settings,
+            viewModel: viewModel
+        )
+        guard
+            let window = controller.window,
+            let contentView = window.contentView
+        else {
+            return XCTFail("Could not create settings window")
+        }
+
+        controller.show()
+        let previewAppeared = await waitForView(
+            SyncedIndicatorArtworkView.self,
+            in: contentView,
+            isPresent: true
+        )
+        XCTAssertTrue(previewAppeared)
+
+        window.close()
+        let previewDisappeared = await waitForView(
+            SyncedIndicatorArtworkView.self,
+            in: contentView,
+            isPresent: false
+        )
+        XCTAssertTrue(previewDisappeared)
+
+        controller.show()
+        let previewReappeared = await waitForView(
+            SyncedIndicatorArtworkView.self,
+            in: contentView,
+            isPresent: true
+        )
+        XCTAssertTrue(previewReappeared)
+        controller.stop()
+    }
+
+    func testEnglishAndRussianCatalogsContainTheSameLocalizedKeys() throws {
+        let requiredKeys: Set<String> = [
+            "menu.settings",
+            "menu.quit",
+            "settings.window.title",
+            "settings.section.appearance",
+            "settings.section.behavior",
+            "settings.demo.accessibility",
+            "settings.animation.style",
+            "settings.shape",
+            "accessibility.status.desktop",
+            "accessibility.status.fullscreen"
+        ]
+        var keysByLanguage: [String: Set<String>] = [:]
+
+        for language in ["en", "ru"] {
+            let localizationURL = try XCTUnwrap(
+                Bundle.main.url(
+                    forResource: language,
+                    withExtension: "lproj"
+                )
+            )
+            let stringsURL = localizationURL
+                .appendingPathComponent("Localizable.strings")
+            let data = try Data(contentsOf: stringsURL)
+            let strings = try XCTUnwrap(
+                PropertyListSerialization.propertyList(
+                    from: data,
+                    options: [],
+                    format: nil
+                ) as? [String: String]
+            )
+            XCTAssertTrue(requiredKeys.isSubset(of: Set(strings.keys)))
+            XCTAssertGreaterThanOrEqual(strings.count, 63)
+            XCTAssertTrue(strings.values.allSatisfy { !$0.isEmpty })
+            keysByLanguage[language] = Set(strings.keys)
+        }
+
+        XCTAssertEqual(keysByLanguage["en"], keysByLanguage["ru"])
     }
 
     func testSizeAndSpacingUseIndependentDiscreteSteps() {
@@ -286,6 +394,35 @@ final class AppSettingsTests: XCTestCase {
             return visualEffect
         }
         return view.subviews.lazy.compactMap(visualEffectView).first
+    }
+
+    private func sliders(in view: NSView) -> [NSSlider] {
+        let current = (view as? NSSlider).map { [$0] } ?? []
+        return current + view.subviews.flatMap { sliders(in: $0) }
+    }
+
+    private func waitForView<ViewType: NSView>(
+        _ type: ViewType.Type,
+        in root: NSView,
+        isPresent: Bool
+    ) async -> Bool {
+        for _ in 0..<50 {
+            root.layoutSubtreeIfNeeded()
+            if containsView(type, in: root) == isPresent {
+                return true
+            }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return containsView(type, in: root) == isPresent
+    }
+
+    private func containsView<ViewType: NSView>(
+        _ type: ViewType.Type,
+        in root: NSView
+    ) -> Bool {
+        root is ViewType
+            || root.subviews.contains { containsView(type, in: $0) }
     }
 
     private func assertSameRGB(

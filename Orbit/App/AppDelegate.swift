@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let viewModel: SpaceViewModel
     let settings: AppSettings
     private var statusBarController: StatusBarController?
+    private var activationRefreshTask: Task<Void, Never>?
 
     override init() {
         let settings = AppSettings()
@@ -26,11 +27,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        activationRefreshTask?.cancel()
+        activationRefreshTask = nil
+        statusBarController?.stop()
+        statusBarController = nil
         viewModel.stop()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        Task { await viewModel.refresh() }
+        activationRefreshTask?.cancel()
+        activationRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await viewModel.refresh()
+        }
     }
 
     private func configureMainMenu(target: StatusBarController) {
@@ -39,13 +48,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let applicationMenu = NSMenu()
 
         let settingsItem = NSMenuItem(
-            title: "Настройки…",
+            title: OrbitL10n.text(
+                "menu.settings",
+                fallback: "Settings…"
+            ),
             action: #selector(StatusBarController.showSettings),
             keyEquivalent: ","
         )
         settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = target
         applicationMenu.addItem(settingsItem)
+        applicationMenu.addItem(.separator())
+
+        let quitItem = NSMenuItem(
+            title: OrbitL10n.text(
+                "menu.quit",
+                fallback: "Quit Orbit"
+            ),
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.keyEquivalentModifierMask = [.command]
+        quitItem.target = NSApp
+        applicationMenu.addItem(quitItem)
 
         applicationItem.submenu = applicationMenu
         mainMenu.addItem(applicationItem)

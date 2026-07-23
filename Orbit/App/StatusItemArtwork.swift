@@ -16,6 +16,13 @@ enum StatusItemArtwork {
         itemWidth * sizeScale * spacingScale
     }
 
+    /// Width occupied by an edge indicator before any inter-item spacing is
+    /// applied. Keeping this independent from `spacingScale` prevents the
+    /// spacing setting from growing the leading and trailing margins.
+    nonisolated static func edgeItemWidth(sizeScale: CGFloat) -> CGFloat {
+        itemWidth * sizeScale
+    }
+
     nonisolated static func horizontalPadding(sizeScale: CGFloat) -> CGFloat {
         horizontalPadding * sizeScale
     }
@@ -29,10 +36,24 @@ enum StatusItemArtwork {
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1
     ) -> CGFloat {
-        CGFloat(normalizedCount(count)) * itemWidth(
+        contentWidth(
+            for: count,
             sizeScale: sizeScale,
             spacingScale: spacingScale
         ) + horizontalPadding(sizeScale: sizeScale) * 2
+    }
+
+    nonisolated static func contentWidth(
+        for count: Int,
+        sizeScale: CGFloat = 1,
+        spacingScale: CGFloat = 1
+    ) -> CGFloat {
+        let count = normalizedCount(count)
+        return edgeItemWidth(sizeScale: sizeScale)
+            + CGFloat(count - 1) * itemWidth(
+                sizeScale: sizeScale,
+                spacingScale: spacingScale
+            )
     }
 
     nonisolated static func fittedSizeScale(
@@ -58,13 +79,13 @@ enum StatusItemArtwork {
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1
     ) -> CGFloat {
-        let width = itemWidth(
+        let spacing = itemWidth(
             sizeScale: sizeScale,
             spacingScale: spacingScale
         )
         return horizontalPadding(sizeScale: sizeScale)
-            + CGFloat(index) * width
-            + width / 2
+            + edgeItemWidth(sizeScale: sizeScale) / 2
+            + CGFloat(index) * spacing
     }
 
     nonisolated private static func normalizedCount(_ count: Int) -> Int {

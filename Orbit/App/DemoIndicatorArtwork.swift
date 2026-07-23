@@ -19,6 +19,7 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
     let reduceMotion: Bool
+    let increasedContrast: Bool
 
     func makeNSView(context: Context) -> SyncedIndicatorArtworkView {
         let view = SyncedIndicatorArtworkView()
@@ -52,7 +53,8 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            increasedContrast: increasedContrast
         )
     }
 }
@@ -71,6 +73,7 @@ final class SyncedIndicatorArtworkView: NSView {
         let animationsEnabled: Bool
         let animationStyle: IndicatorAnimationStyle
         let reduceMotion: Bool
+        let increasedContrast: Bool
     }
 
     private static let previewHeight: CGFloat = 45
@@ -83,9 +86,8 @@ final class SyncedIndicatorArtworkView: NSView {
             * StatusHoverMotion.maximumHorizontalScale
             * sizeScale
             / 2
-        let edgeIndicatorCenter = StatusItemArtwork.itemWidth(
-            sizeScale: sizeScale,
-            spacingScale: spacingScale
+        let edgeIndicatorCenter = StatusItemArtwork.edgeItemWidth(
+            sizeScale: sizeScale
         ) / 2
         let antialiasingAllowance = 0.75 * sizeScale
         return max(
@@ -157,7 +159,8 @@ final class SyncedIndicatorArtworkView: NSView {
         shapeStyle: IndicatorShapeStyle,
         animationsEnabled: Bool,
         animationStyle: IndicatorAnimationStyle,
-        reduceMotion: Bool
+        reduceMotion: Bool,
+        increasedContrast: Bool
     ) {
         guard !indicators.isEmpty else {
             clearArtwork()
@@ -181,7 +184,8 @@ final class SyncedIndicatorArtworkView: NSView {
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            increasedContrast: increasedContrast
         )
         let previousRequestedConfiguration = requestedConfiguration
         requestedConfiguration = newConfiguration
@@ -235,7 +239,8 @@ final class SyncedIndicatorArtworkView: NSView {
             shapeStyle: presentedConfiguration.shapeStyle,
             animationsEnabled: presentedConfiguration.animationsEnabled,
             animationStyle: presentedConfiguration.animationStyle,
-            reduceMotion: newConfiguration.reduceMotion
+            reduceMotion: newConfiguration.reduceMotion,
+            increasedContrast: newConfiguration.increasedContrast
         )
         let artworkChanged = artworkContentChanged(
             from: presentedConfiguration,
@@ -283,6 +288,7 @@ final class SyncedIndicatorArtworkView: NSView {
             || old.spacingScale != new.spacingScale
             || old.showsThinOutline != new.showsThinOutline
             || old.reduceMotion != new.reduceMotion
+            || old.increasedContrast != new.increasedContrast
     }
 
     private func artworkContentChanged(
@@ -364,7 +370,8 @@ final class SyncedIndicatorArtworkView: NSView {
             horizontalOverflowPadding: Self.horizontalOverflowPadding(
                 for: configuration.sizeScale,
                 spacingScale: configuration.spacingScale
-            )
+            ),
+            increasedContrast: configuration.increasedContrast
         )
         renderedActiveIndex = configuration.activeIndex
         renderedPillFrame = configuration.activeIndex.map {

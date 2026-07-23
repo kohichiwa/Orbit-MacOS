@@ -19,9 +19,11 @@ nonisolated final class StatusIndicatorImageRenderer {
     private let indicatorKinds: [SpaceIndicatorKind]
     private let indicatorColors: [NSColor]
     private let showsThinOutline: Bool
+    private let increasedContrast: Bool
     private let shapeStyle: IndicatorShapeStyle
     private let sizeScale: CGFloat
     private let itemWidth: CGFloat
+    private let edgeItemWidth: CGFloat
     private let horizontalPadding: CGFloat
     private let horizontalOverflowPadding: CGFloat
     private let dotDiameter: CGFloat
@@ -36,16 +38,19 @@ nonisolated final class StatusIndicatorImageRenderer {
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1,
         imageHeight: CGFloat = StatusItemArtwork.imageHeight,
-        horizontalOverflowPadding: CGFloat = 0
+        horizontalOverflowPadding: CGFloat = 0,
+        increasedContrast: Bool = false
     ) {
         self.count = max(count, 1)
         self.showsThinOutline = showsThinOutline
+        self.increasedContrast = increasedContrast
         self.shapeStyle = shapeStyle
         self.sizeScale = sizeScale
         itemWidth = StatusItemArtwork.itemWidth(
             sizeScale: sizeScale,
             spacingScale: spacingScale
         )
+        edgeItemWidth = StatusItemArtwork.edgeItemWidth(sizeScale: sizeScale)
         horizontalPadding = StatusItemArtwork.horizontalPadding(
             sizeScale: sizeScale
         )
@@ -68,7 +73,11 @@ nonisolated final class StatusIndicatorImageRenderer {
                 : fixedColors[0]
         }
         imageSize = NSSize(
-            width: CGFloat(self.count) * itemWidth
+            width: StatusItemArtwork.contentWidth(
+                for: self.count,
+                sizeScale: sizeScale,
+                spacingScale: spacingScale
+            )
                 + self.horizontalOverflowPadding * 2,
             height: imageHeight
         )
@@ -170,8 +179,8 @@ nonisolated final class StatusIndicatorImageRenderer {
             guard index != hiddenActiveIndex else { continue }
             let center = NSPoint(
                 x: horizontalOverflowPadding
-                    + CGFloat(index) * itemWidth
-                    + itemWidth / 2,
+                    + edgeItemWidth / 2
+                    + CGFloat(index) * itemWidth,
                 y: imageSize.height / 2
             )
             let presentation = inactivePresentation(
@@ -192,8 +201,20 @@ nonisolated final class StatusIndicatorImageRenderer {
             for: pillIndex,
             pill: pill
         )
-        let width = pill.width * hoverScale.width
-        let height = pill.height * hoverScale.height
+        let activeSize = shapeStyle.activeIndicatorSize(
+            sizeScale: sizeScale
+        )
+
+        // Hover belongs to the destination indicator, not to the temporary
+        // liquid bridge. Scaling the complete bridge makes an edge-to-edge
+        // continuous transition grow beyond the bitmap on both sides and its
+        // rounded caps are then clipped by AppKit. Add only the destination
+        // indicator's local hover delta so the same feedback remains visible
+        // without changing the bridge's span.
+        let width = pill.width
+            + activeSize.width * (hoverScale.width - 1)
+        let height = pill.height
+            + activeSize.height * (hoverScale.height - 1)
         let centerX = pill.x - horizontalPadding
             + horizontalOverflowPadding
         let rect = NSRect(
@@ -242,16 +263,17 @@ nonisolated final class StatusIndicatorImageRenderer {
             drawHollowIndicator(
                 in: rect,
                 color: color,
-                strokeOpacity: 0.46 * opacity,
-                thinOutlineOpacity: 0.25 * opacity,
+                strokeOpacity: inactiveFullscreenOpacity * opacity,
+                thinOutlineOpacity: thinOutlineOpacity * opacity,
                 lineWidth: fullscreenOutlineWidth
+                    * (increasedContrast ? 1.12 : 1)
             )
         } else {
             drawFilledIndicator(
                 in: rect,
                 color: color,
-                fillOpacity: 0.32 * opacity,
-                outlineOpacity: 0.25 * opacity
+                fillOpacity: inactiveDesktopOpacity * opacity,
+                outlineOpacity: thinOutlineOpacity * opacity
             )
         }
     }
@@ -317,8 +339,9 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 strokeOpacity: opacity,
-                thinOutlineOpacity: 0.25 * opacity,
-                lineWidth: fullscreenOutlineWidth * 1.5,
+                thinOutlineOpacity: thinOutlineOpacity * opacity,
+                lineWidth: fullscreenOutlineWidth
+                    * (increasedContrast ? 1.68 : 1.5),
                 waist: waist
             )
         } else {
@@ -326,7 +349,7 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 fillOpacity: opacity,
-                outlineOpacity: 0.25 * opacity,
+                outlineOpacity: thinOutlineOpacity * opacity,
                 waist: waist
             )
         }
@@ -641,7 +664,7 @@ nonisolated final class StatusIndicatorImageRenderer {
     private func inferredIndex(for pill: StatusPillFrame) -> Int? {
         let localCenter = pill.x - horizontalPadding
         let rawIndex = (
-            localCenter - itemWidth / 2
+            localCenter - edgeItemWidth / 2
         ) / itemWidth
         let index = Int(rawIndex.rounded())
         return (0..<count).contains(index) ? index : nil
@@ -662,6 +685,18 @@ nonisolated final class StatusIndicatorImageRenderer {
             blue: components[2],
             alpha: 1
         )
+    }
+
+    private var inactiveDesktopOpacity: CGFloat {
+        increasedContrast ? 0.55 : 0.50
+    }
+
+    private var inactiveFullscreenOpacity: CGFloat {
+        increasedContrast ? 0.72 : 0.46
+    }
+
+    private var thinOutlineOpacity: CGFloat {
+        increasedContrast ? 0.48 : 0.25
     }
 
     private var fullscreenOutlineWidth: CGFloat {

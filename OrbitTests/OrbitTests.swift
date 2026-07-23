@@ -94,6 +94,7 @@ final class SystemSpacesReaderTests: XCTestCase {
         await fulfillment(of: [received], timeout: 1)
         reader.stop()
     }
+
 }
 
 final class SpaceViewModelTests: XCTestCase {
@@ -226,6 +227,68 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOlderRefreshCannotOverwriteANewerSnapshot() async {
+        let initial = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 0)
+        let stale = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 1)
+        let current = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 2)
+        let reader = ControlledSpacesReader()
+        let viewModel = SpaceViewModel(
+            reader: reader,
+            controller: FakeSpaceController(canPostEvents: true),
+            previewSnapshot: initial
+        )
+
+        let firstRefresh = Task { await viewModel.refresh() }
+        await waitForPendingReads(1, in: reader)
+        let firstRead = reader.pendingReadIdentifiers.first
+
+        let secondRefresh = Task { await viewModel.refresh() }
+        await waitForPendingReads(2, in: reader)
+        let secondRead = reader.pendingReadIdentifiers.last
+
+        guard let firstRead, let secondRead, firstRead != secondRead else {
+            firstRefresh.cancel()
+            secondRefresh.cancel()
+            return XCTFail("Expected two independent pending reads")
+        }
+
+        reader.resume(read: secondRead, with: current)
+        await secondRefresh.value
+        XCTAssertEqual(viewModel.activeIndex, 2)
+
+        reader.resume(read: firstRead, with: stale)
+        await firstRefresh.value
+        XCTAssertEqual(viewModel.activeIndex, 2)
+    }
+
+    @MainActor
+    func testStoppingStatusBarControllerReleasesItsDisplayLinkTarget() async {
+        let suiteName = "OrbitTests.status.stop.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = AppSettings(defaults: defaults)
+        let snapshot = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 1)
+        let viewModel = SpaceViewModel(
+            controller: FakeSpaceController(canPostEvents: true),
+            previewSnapshot: snapshot
+        )
+        var controller: StatusBarController? = StatusBarController(
+            viewModel: viewModel,
+            settings: settings
+        )
+        weak let releasedController = controller
+
+        controller?.stop()
+        controller = nil
+        await Task.yield()
+
+        XCTAssertNil(releasedController)
+    }
+
+    @MainActor
     func testTransientSnapshotWithoutCurrentSpaceDoesNotHideActivePill() async {
         let initial = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 0)
         let transient = SpaceSnapshot(
@@ -252,6 +315,35 @@ final class SpaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.activeIndex, 1)
     }
 
+    func testStatusAccessibilityDistinguishesDesktopAndFullscreen() {
+        let kinds: [SpaceIndicatorKind] = [
+            .desktop(colorIndex: 0),
+            .fullscreen(colorIndex: 0)
+        ]
+        let desktop = StatusAccessibility.value(
+            for: 0,
+            indicatorKinds: kinds
+        )
+        let fullscreen = StatusAccessibility.value(
+            for: 1,
+            indicatorKinds: kinds
+        )
+
+        XCTAssertTrue(
+            desktop?.localizedCaseInsensitiveContains("desktop") == true
+                || desktop?.localizedCaseInsensitiveContains("стол") == true
+        )
+        XCTAssertTrue(
+            fullscreen?.localizedCaseInsensitiveContains("fullscreen") == true
+                || fullscreen?.localizedCaseInsensitiveContains("полноэкран")
+                    == true
+        )
+        XCTAssertNil(StatusAccessibility.value(for: 2, indicatorKinds: kinds))
+        XCTAssertNil(
+            StatusAccessibility.value(for: nil, indicatorKinds: kinds)
+        )
+    }
+
     @MainActor
     func testStatusItemWidthAndLightDarkRendering() throws {
         XCTAssertEqual(StatusItemView.preferredWidth(for: 1), 22)
@@ -274,6 +366,69 @@ final class SpaceViewModelTests: XCTestCase {
                 CGFloat(count - 1) * StatusItemArtwork.itemWidth
             )
         }
+    }
+
+    @MainActor
+    func testSpacingChangesOnlyInternalIndicatorGaps() {
+        let count = 6
+        let sizeScale: CGFloat = 1.4
+        let compactSpacing: CGFloat = 1
+        let expandedSpacing: CGFloat = 1.6
+
+        let compactWidth = StatusItemArtwork.preferredWidth(
+            for: count,
+            sizeScale: sizeScale,
+            spacingScale: compactSpacing
+        )
+        let expandedWidth = StatusItemArtwork.preferredWidth(
+            for: count,
+            sizeScale: sizeScale,
+            spacingScale: expandedSpacing
+        )
+        let compactFirst = StatusItemArtwork.centerX(
+            for: 0,
+            sizeScale: sizeScale,
+            spacingScale: compactSpacing
+        )
+        let expandedFirst = StatusItemArtwork.centerX(
+            for: 0,
+            sizeScale: sizeScale,
+            spacingScale: expandedSpacing
+        )
+        let compactLast = StatusItemArtwork.centerX(
+            for: count - 1,
+            sizeScale: sizeScale,
+            spacingScale: compactSpacing
+        )
+        let expandedLast = StatusItemArtwork.centerX(
+            for: count - 1,
+            sizeScale: sizeScale,
+            spacingScale: expandedSpacing
+        )
+
+        XCTAssertEqual(compactFirst, expandedFirst, accuracy: 0.0001)
+        XCTAssertEqual(
+            compactWidth - compactLast,
+            expandedWidth - expandedLast,
+            accuracy: 0.0001
+        )
+        XCTAssertGreaterThan(
+            expandedLast - expandedFirst,
+            compactLast - compactFirst
+        )
+        XCTAssertEqual(
+            StatusItemArtwork.preferredWidth(
+                for: 1,
+                sizeScale: sizeScale,
+                spacingScale: compactSpacing
+            ),
+            StatusItemArtwork.preferredWidth(
+                for: 1,
+                sizeScale: sizeScale,
+                spacingScale: expandedSpacing
+            ),
+            accuracy: 0.0001
+        )
     }
 
     @MainActor
@@ -324,6 +479,55 @@ final class SpaceViewModelTests: XCTestCase {
             clickPoint: CGPoint(x: 150, y: 90),
             protectedRects: protectedRects
         ))
+    }
+
+    @MainActor
+    func testPopupPlacementKeepsBubbleInsideWindowAndPointerOnIndicator() {
+        let containerWidth: CGFloat = 540
+        let bubbleWidth: CGFloat = 170
+        let interfaceInset: CGFloat = 24
+        let pointerEdgeInset: CGFloat = 29
+        let halfContainer = containerWidth / 2
+        let halfBubble = bubbleWidth / 2
+        let maximumPointerOffset = halfBubble - pointerEdgeInset
+
+        for anchorOffset in [-242.0, 0, 242.0] {
+            let placement = PopupHorizontalPlacement.resolve(
+                anchorOffset: anchorOffset,
+                containerWidth: containerWidth,
+                bubbleWidth: bubbleWidth,
+                horizontalInset: interfaceInset,
+                pointerEdgeInset: pointerEdgeInset
+            )
+
+            XCTAssertGreaterThanOrEqual(
+                placement.bubbleCenterOffset - halfBubble,
+                -halfContainer + interfaceInset - 0.001
+            )
+            XCTAssertLessThanOrEqual(
+                placement.bubbleCenterOffset + halfBubble,
+                halfContainer - interfaceInset + 0.001
+            )
+            XCTAssertLessThanOrEqual(
+                abs(placement.pointerOffset),
+                maximumPointerOffset + 0.001
+            )
+        }
+
+        for anchorOffset in [-216.0, 0, 216.0] {
+            let placement = PopupHorizontalPlacement.resolve(
+                anchorOffset: anchorOffset,
+                containerWidth: containerWidth,
+                bubbleWidth: bubbleWidth,
+                horizontalInset: interfaceInset,
+                pointerEdgeInset: pointerEdgeInset
+            )
+            XCTAssertEqual(
+                placement.bubbleCenterOffset + placement.pointerOffset,
+                anchorOffset,
+                accuracy: 0.001
+            )
+        }
     }
 
     func testDemoSwipeRegionExtendsThroughBackgroundTransition() {
@@ -717,58 +921,74 @@ final class SpaceViewModelTests: XCTestCase {
             startTime: 0
         )
 
-        for (sourceIndex, targetIndex) in [(0, count - 1), (count - 1, 0)] {
-            let activeHover = StatusHoverMotion(
-                index: targetIndex,
-                fromScale: inactiveHover.targetScale,
-                isHovered: true,
-                isActive: true,
-                startTime: 0
-            )
-            let motion = StatusPillMotion(
-                fromX: StatusItemArtwork.centerX(
-                    for: sourceIndex,
+        for style in IndicatorAnimationStyle.allCases {
+            for (sourceIndex, targetIndex) in [
+                (0, count - 1),
+                (count - 1, 0)
+            ] {
+                let activeHover = StatusHoverMotion(
+                    index: targetIndex,
+                    fromScale: inactiveHover.targetScale,
+                    isHovered: true,
+                    isActive: true,
+                    startTime: 0
+                )
+                let motion = StatusPillMotion(
+                    fromX: StatusItemArtwork.centerX(
+                        for: sourceIndex,
+                        sizeScale: sizeScale,
+                        spacingScale: spacingScale
+                    ),
+                    toX: StatusItemArtwork.centerX(
+                        for: targetIndex,
+                        sizeScale: sizeScale,
+                        spacingScale: spacingScale
+                    ),
+                    startTime: 0,
                     sizeScale: sizeScale,
-                    spacingScale: spacingScale
-                ),
-                toX: StatusItemArtwork.centerX(
-                    for: targetIndex,
-                    sizeScale: sizeScale,
-                    spacingScale: spacingScale
-                ),
-                startTime: 0,
-                sizeScale: sizeScale,
-                itemWidth: StatusItemArtwork.itemWidth(
-                    sizeScale: sizeScale,
-                    spacingScale: spacingScale
-                ),
-                style: .classic
-            )
+                    itemWidth: StatusItemArtwork.itemWidth(
+                        sizeScale: sizeScale,
+                        spacingScale: spacingScale
+                    ),
+                    style: style
+                )
 
-            for step in 0...120 {
-                let timestamp = motion.duration * Double(step) / 120
-                renderer.update(
-                    pill: motion.frame(at: timestamp),
-                    activeIndex: targetIndex,
-                    hoverScales: [
-                        targetIndex: activeHover.frame(at: timestamp).scale
-                    ]
-                )
-                guard
-                    let data = renderer.image.tiffRepresentation,
-                    let bitmap = NSBitmapImageRep(data: data),
-                    let bounds = opaquePixelBounds(
-                        in: bitmap,
-                        minimumAlpha: 0.01
+                for step in 0...120 {
+                    let timestamp = motion.duration * Double(step) / 120
+                    renderer.update(
+                        pill: motion.frame(at: timestamp),
+                        activeIndex: targetIndex,
+                        transitionSourceIndex:
+                            style.blendsIndicatorAppearanceDuringTransition
+                                ? sourceIndex
+                                : nil,
+                        hoverScales: [
+                            targetIndex: activeHover.frame(at: timestamp).scale
+                        ]
                     )
-                else {
-                    return XCTFail("Could not inspect transition frame")
+                    guard
+                        let data = renderer.image.tiffRepresentation,
+                        let bitmap = NSBitmapImageRep(data: data),
+                        let bounds = opaquePixelBounds(
+                            in: bitmap,
+                            minimumAlpha: 0.01
+                        )
+                    else {
+                        return XCTFail(
+                            "Could not inspect \(style) transition frame"
+                        )
+                    }
+                    XCTAssertGreaterThan(
+                        bounds.minX,
+                        0,
+                        "\(style) clipped at step \(step)"
+                    )
+                    XCTAssertLessThan(
+                        bounds.maxX,
+                        CGFloat(bitmap.pixelsWide),
+                        "\(style) clipped at step \(step)"
+                    )
                 }
-                XCTAssertGreaterThan(bounds.minX, 0)
-                XCTAssertLessThan(
-                    bounds.maxX,
-                    CGFloat(bitmap.pixelsWide)
-                )
             }
         }
     }
@@ -808,6 +1028,47 @@ final class SpaceViewModelTests: XCTestCase {
         XCTAssertNotEqual(
             plainFullscreen.image.tiffRepresentation,
             outlinedFullscreen.image.tiffRepresentation
+        )
+    }
+
+    @MainActor
+    func testIncreasedContrastStrengthensIndicatorsWithoutChangingGeometry() throws {
+        let kinds: [SpaceIndicatorKind] = [
+            .desktop(colorIndex: 0),
+            .fullscreen(colorIndex: 0)
+        ]
+        let normal = StatusIndicatorImageRenderer(
+            count: kinds.count,
+            indicatorKinds: kinds,
+            indicatorColors: [.systemBlue],
+            showsThinOutline: true
+        )
+        let increased = StatusIndicatorImageRenderer(
+            count: kinds.count,
+            indicatorKinds: kinds,
+            indicatorColors: [.systemBlue],
+            showsThinOutline: true,
+            increasedContrast: true
+        )
+
+        let normalBitmap = try XCTUnwrap(
+            NSBitmapImageRep(
+                data: try XCTUnwrap(normal.image.tiffRepresentation)
+            )
+        )
+        let increasedBitmap = try XCTUnwrap(
+            NSBitmapImageRep(
+                data: try XCTUnwrap(increased.image.tiffRepresentation)
+            )
+        )
+        XCTAssertEqual(normal.imageSize, increased.imageSize)
+        XCTAssertEqual(
+            opaquePixelBounds(in: normalBitmap, minimumAlpha: 0.01),
+            opaquePixelBounds(in: increasedBitmap, minimumAlpha: 0.01)
+        )
+        XCTAssertGreaterThan(
+            accumulatedAlpha(in: increasedBitmap),
+            accumulatedAlpha(in: normalBitmap)
         )
     }
 
@@ -1037,6 +1298,26 @@ final class SpaceViewModelTests: XCTestCase {
         )
     }
 
+    private func accumulatedAlpha(in bitmap: NSBitmapImageRep) -> CGFloat {
+        var result: CGFloat = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                result += bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0
+            }
+        }
+        return result
+    }
+
+    @MainActor
+    private func waitForPendingReads(
+        _ count: Int,
+        in reader: ControlledSpacesReader
+    ) async {
+        for _ in 0..<100 where reader.pendingReadIdentifiers.count < count {
+            await Task.yield()
+        }
+    }
+
     @MainActor
     private func renderStatusItem(appearance: NSAppearance.Name, filename: String) throws {
         let snapshot = SpaceSnapshot(identifiers: [1, 2, 3, 4], activeIndex: 1)
@@ -1107,6 +1388,35 @@ private final class EventSpacesReader: SpacesReading {
     func stop() { changeHandler = nil }
     func read() async -> SpaceSnapshot? { snapshot }
     func sendChange() { changeHandler?() }
+}
+
+@MainActor
+private final class ControlledSpacesReader: SpacesReading {
+    private var nextIdentifier = 0
+    private var continuations: [
+        Int: CheckedContinuation<SpaceSnapshot?, Never>
+    ] = [:]
+
+    var pendingReadIdentifiers: [Int] {
+        continuations.keys.sorted()
+    }
+
+    func start(onChange: @escaping () -> Void) {}
+    func stop() {}
+
+    func read() async -> SpaceSnapshot? {
+        let identifier = nextIdentifier
+        nextIdentifier += 1
+        return await withCheckedContinuation { continuation in
+            continuations[identifier] = continuation
+        }
+    }
+
+    func resume(read identifier: Int, with snapshot: SpaceSnapshot?) {
+        continuations.removeValue(forKey: identifier)?.resume(
+            returning: snapshot
+        )
+    }
 }
 
 @MainActor

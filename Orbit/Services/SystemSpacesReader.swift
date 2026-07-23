@@ -1,17 +1,38 @@
 import AppKit
 import CoreGraphics
+import Darwin
 import Foundation
 import OSLog
 
 private typealias OrbitCGSConnectionID = UInt32
-
-@_silgen_name("_CGSDefaultConnection")
-nonisolated private func orbitCGSDefaultConnection() -> OrbitCGSConnectionID
-
-@_silgen_name("CGSCopyManagedDisplaySpaces")
-nonisolated private func orbitCGSCopyManagedDisplaySpaces(
-    _ connection: OrbitCGSConnectionID
+private typealias OrbitCGSDefaultConnectionFunction = @convention(c) () ->
+    OrbitCGSConnectionID
+private typealias OrbitCGSCopyManagedDisplaySpacesFunction = @convention(c) (
+    OrbitCGSConnectionID
 ) -> Unmanaged<CFArray>?
+
+private enum OrbitWindowServerSymbols {
+    // These WindowServer entry points are private and may disappear in a future
+    // macOS release. Resolve them lazily from AppKit's process image so Orbit can
+    // continue with its preferences fallback instead of failing at launch.
+    nonisolated static let defaultConnection = resolve(
+        "_CGSDefaultConnection",
+        as: OrbitCGSDefaultConnectionFunction.self
+    )
+    nonisolated static let copyManagedDisplaySpaces = resolve(
+        "CGSCopyManagedDisplaySpaces",
+        as: OrbitCGSCopyManagedDisplaySpacesFunction.self
+    )
+
+    nonisolated private static func resolve<Function>(
+        _ name: String,
+        as type: Function.Type
+    ) -> Function? {
+        let defaultSearchHandle = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let symbol = dlsym(defaultSearchHandle, name) else { return nil }
+        return unsafeBitCast(symbol, to: type)
+    }
+}
 
 @MainActor
 protocol SpacesReading: AnyObject {
@@ -31,11 +52,16 @@ final class SystemSpacesReader: SpacesReading {
     private var structureTimer: Timer?
     private var structureCheckTask: Task<Void, Never>?
     private var lastObservedIndicators: [SpaceIndicatorEntry]?
+    private var isRunning = false
+    private var lifecycleGeneration: UInt = 0
+    private var hasLoggedReadFailure = false
 
     nonisolated deinit {}
 
     func start(onChange: @escaping () -> Void) {
         stop()
+        isRunning = true
+        let generation = lifecycleGeneration
         changeHandler = onChange
         observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -46,7 +72,11 @@ final class SystemSpacesReader: SpacesReading {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.changeHandler?()
+                guard
+                    let self,
+                    self.isCurrentLifecycle(generation)
+                else { return }
+                self.changeHandler?()
             }
         }
 
@@ -55,16 +85,22 @@ final class SystemSpacesReader: SpacesReading {
         // full-screen indicators in sync when an app enters or exits full screen.
         let structureTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.checkSpaceStructure()
+                guard
+                    let self,
+                    self.isCurrentLifecycle(generation)
+                else { return }
+                self.checkSpaceStructure(generation: generation)
             }
         }
         structureTimer.tolerance = 0.1
         RunLoop.main.add(structureTimer, forMode: .common)
         self.structureTimer = structureTimer
-        checkSpaceStructure()
+        checkSpaceStructure(generation: generation)
     }
 
     func stop() {
+        lifecycleGeneration &+= 1
+        isRunning = false
         if let observer {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
@@ -74,17 +110,27 @@ final class SystemSpacesReader: SpacesReading {
         structureCheckTask?.cancel()
         structureCheckTask = nil
         lastObservedIndicators = nil
+        hasLoggedReadFailure = false
         changeHandler = nil
     }
 
-    private func checkSpaceStructure() {
-        guard structureCheckTask == nil else { return }
+    private func checkSpaceStructure(generation: UInt) {
+        guard
+            isCurrentLifecycle(generation),
+            structureCheckTask == nil
+        else { return }
         structureCheckTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.structureCheckTask = nil }
+            defer {
+                if self.isCurrentLifecycle(generation) {
+                    self.structureCheckTask = nil
+                }
+            }
             guard
+                self.isCurrentLifecycle(generation),
                 !Task.isCancelled,
-                let snapshot = await self.read(),
+                let snapshot = await self.read(priority: .utility),
+                self.isCurrentLifecycle(generation),
                 !Task.isCancelled
             else { return }
 
@@ -98,12 +144,27 @@ final class SystemSpacesReader: SpacesReading {
         }
     }
 
+    private func isCurrentLifecycle(_ generation: UInt) -> Bool {
+        isRunning && lifecycleGeneration == generation
+    }
+
     func read() async -> SpaceSnapshot? {
-        let snapshot = await Task.detached(priority: .userInitiated) {
+        await read(priority: .userInitiated)
+    }
+
+    private func read(priority: TaskPriority) async -> SpaceSnapshot? {
+        let snapshot = await Task.detached(priority: priority) {
             Self.readFreshSnapshot()
         }.value
         if snapshot == nil {
-            logger.error("The current macOS Spaces configuration could not be read")
+            if !hasLoggedReadFailure {
+                logger.error(
+                    "The current macOS Spaces configuration could not be read"
+                )
+                hasLoggedReadFailure = true
+            }
+        } else {
+            hasLoggedReadFailure = false
         }
         return snapshot
     }
@@ -116,8 +177,10 @@ final class SystemSpacesReader: SpacesReading {
     /// `defaults export` can lag behind by several transitions on recent macOS.
     nonisolated private static func readManagedDisplaySnapshot() -> SpaceSnapshot? {
         guard
-            let rawDisplays = orbitCGSCopyManagedDisplaySpaces(
-                orbitCGSDefaultConnection()
+            let defaultConnection = OrbitWindowServerSymbols.defaultConnection,
+            let copyManagedDisplaySpaces = OrbitWindowServerSymbols.copyManagedDisplaySpaces,
+            let rawDisplays = copyManagedDisplaySpaces(
+                defaultConnection()
             )?.takeRetainedValue(),
             let monitors = rawDisplays as? [[String: Any]]
         else { return nil }

@@ -2,6 +2,34 @@ import AppKit
 import Combine
 import QuartzCore
 
+enum StatusAccessibility {
+    nonisolated static func value(
+        for index: Int?,
+        indicatorKinds: [SpaceIndicatorKind]
+    ) -> String? {
+        guard
+            let index,
+            indicatorKinds.indices.contains(index)
+        else { return nil }
+        let position = index + 1
+        let total = indicatorKinds.count
+        if indicatorKinds[index].isFullscreen {
+            return OrbitL10n.format(
+                "accessibility.status.fullscreen",
+                fallback: "Полноэкранное приложение, %ld из %ld",
+                position,
+                total
+            )
+        }
+        return OrbitL10n.format(
+            "accessibility.status.desktop",
+            fallback: "Рабочий стол %ld из %ld",
+            position,
+            total
+        )
+    }
+}
+
 @MainActor
 private final class StatusHoverTrackingView: NSView {
     var eventHandler: (NSEvent?) -> Void
@@ -85,10 +113,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var presentedAnimationStyle: IndicatorAnimationStyle
     private var presentedShapeStyle: IndicatorShapeStyle
     private var presentedMenu: NSMenu?
-    private lazy var settingsWindowController = SettingsWindowController(
-        settings: settings,
-        viewModel: viewModel
-    )
+    private var settingsWindowController: SettingsWindowController?
+    private var isStopped = false
 
     init(viewModel: SpaceViewModel, settings: AppSettings) {
         self.viewModel = viewModel
@@ -103,6 +129,30 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         observeChanges()
     }
 
+    func stop() {
+        guard !isStopped else { return }
+        isStopped = true
+
+        settingsWindowController?.stop()
+        settingsWindowController = nil
+        presentedMenu?.cancelTracking()
+        presentedMenu = nil
+        statusItem.menu = nil
+        cancellables.removeAll()
+
+        displayLink?.invalidate()
+        displayLink = nil
+        pillMotion = nil
+        hoverMotions.removeAll()
+        artworkRefreshMotion = nil
+
+        hoverTrackingView?.removeFromSuperview()
+        hoverTrackingView = nil
+        statusItem.button?.target = nil
+        statusItem.button?.action = nil
+        NSStatusBar.system.removeStatusItem(statusItem)
+    }
+
     private func configureStatusItem() {
         guard let button = statusItem.button else { return }
         button.title = ""
@@ -112,7 +162,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         button.target = self
         button.action = #selector(statusItemClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseDown])
-        button.setAccessibilityLabel("Рабочие столы")
+        button.setAccessibilityLabel(
+            OrbitL10n.text(
+                "accessibility.orbitSpaces",
+                fallback: "Пространства Orbit"
+            )
+        )
 
         updateArtwork(
             for: viewModel.spaceCount,
@@ -121,6 +176,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         configureDisplayLink(for: button)
         configureHoverTracking(for: button)
         updateActivePill(to: viewModel.activeIndex, animated: false)
+        updateAccessibilityValue(viewModel.activeIndex)
     }
 
     private func observeChanges() {
@@ -178,6 +234,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.accessibilityDisplayOptionsDidChange()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: NSColor.systemColorsDidChangeNotification
+        )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshArtworkForSettings()
             }
             .store(in: &cancellables)
     }
@@ -264,7 +329,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             spacingScale: indicatorSpacingScale,
             horizontalOverflowPadding: StatusItemArtwork.horizontalPadding(
                 sizeScale: indicatorSizeScale
-            )
+            ),
+            increasedContrast: NSWorkspace.shared
+                .accessibilityDisplayShouldIncreaseContrast
         )
         artworkRenderer = renderer
 
@@ -299,6 +366,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if hoverTrackingView != nil {
             configureHoverTracking(for: button)
         }
+        updateAccessibilityValue(renderedActiveIndex)
     }
 
     private func updateActivePill(to index: Int?, animated: Bool) {
@@ -448,12 +516,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func updateAccessibilityValue(_ index: Int?) {
-        guard let index else {
-            statusItem.button?.setAccessibilityValue(nil)
-            return
-        }
         statusItem.button?.setAccessibilityValue(
-            "Рабочий стол \(index + 1) из \(renderedSpaceCount)"
+            StatusAccessibility.value(
+                for: index,
+                indicatorKinds: renderedIndicatorKinds
+            )
         )
     }
 
@@ -469,11 +536,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         at point: NSPoint,
         in button: NSStatusBarButton
     ) -> Int? {
-        let contentWidth = CGFloat(renderedSpaceCount) * renderedItemWidth
+        let contentWidth = StatusItemArtwork.contentWidth(
+            for: renderedSpaceCount,
+            sizeScale: indicatorSizeScale,
+            spacingScale: indicatorSpacingScale
+        )
         let leadingEdge = max((button.bounds.width - contentWidth) / 2, 0)
         let relativeX = point.x - leadingEdge
         guard relativeX >= 0, relativeX < contentWidth else { return nil }
-        return Int(relativeX / renderedItemWidth)
+        let edgeHalfWidth = StatusItemArtwork.edgeItemWidth(
+            sizeScale: indicatorSizeScale
+        ) / 2
+        let index = Int(floor(
+            (relativeX - edgeHalfWidth + renderedItemWidth / 2)
+                / renderedItemWidth
+        ))
+        return (0..<renderedSpaceCount).contains(index) ? index : nil
     }
 
     private func updateHover(
@@ -554,6 +632,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// never the only carrier of information.
     private func accessibilityDisplayOptionsDidChange() {
         guard NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            refreshArtworkForSettings()
             return
         }
 
@@ -615,7 +694,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
 
         let settingsItem = item(
-            "Настройки…",
+            OrbitL10n.text("menu.settings", fallback: "Настройки…"),
             action: #selector(showSettings),
             symbol: "gearshape",
             key: ","
@@ -623,10 +702,29 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         settingsItem.keyEquivalentModifierMask = [.command]
         menu.addItem(settingsItem)
         if !viewModel.canPostEvents {
-            menu.addItem(item("Разрешить управление…", action: #selector(requestAccess), symbol: "hand.raised"))
+            menu.addItem(
+                item(
+                    OrbitL10n.text(
+                        "menu.allowControl",
+                        fallback: "Разрешить управление…"
+                    ),
+                    action: #selector(requestAccess),
+                    symbol: "hand.raised"
+                )
+            )
         }
         menu.addItem(.separator())
-        menu.addItem(item("Завершить Orbit", action: #selector(quit), symbol: "power", key: "q"))
+        menu.addItem(
+            item(
+                OrbitL10n.text(
+                    "menu.quit",
+                    fallback: "Завершить Orbit"
+                ),
+                action: #selector(quit),
+                symbol: "power",
+                key: "q"
+            )
+        )
         return menu
     }
 
@@ -642,7 +740,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc func showSettings() {
-        let settingsWindowController = settingsWindowController
+        let settingsWindowController: SettingsWindowController
+        if let existingController = self.settingsWindowController {
+            settingsWindowController = existingController
+        } else {
+            let newController = SettingsWindowController(
+                settings: settings,
+                viewModel: viewModel
+            )
+            self.settingsWindowController = newController
+            settingsWindowController = newController
+        }
         DispatchQueue.main.async {
             settingsWindowController.show()
         }

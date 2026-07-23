@@ -1,14 +1,19 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private static let contentSize = NSSize(width: 540, height: 640)
+    private let presentationState: SettingsPresentationState
 
     init(settings: AppSettings, viewModel: SpaceViewModel) {
+        let presentationState = SettingsPresentationState()
+        self.presentationState = presentationState
         let rootView = SettingsRootView(
             settings: settings,
-            viewModel: viewModel
+            viewModel: viewModel,
+            presentationState: presentationState
         )
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
@@ -32,7 +37,10 @@ final class SettingsWindowController: NSWindowController {
             defer: false
         )
         window.contentView = backgroundView
-        window.title = "Настройки"
+        window.title = OrbitL10n.text(
+            "settings.window.title",
+            fallback: "Настройки Orbit"
+        )
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
@@ -54,6 +62,8 @@ final class SettingsWindowController: NSWindowController {
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.center()
         super.init(window: window)
+        window.delegate = self
+        window.setFrameAutosaveName("OrbitSettingsWindow")
     }
 
     @available(*, unavailable)
@@ -63,6 +73,7 @@ final class SettingsWindowController: NSWindowController {
 
     func show() {
         guard let window else { return }
+        presentationState.isPresented = true
         if window.contentView?.bounds.size != Self.contentSize {
             window.setContentSize(Self.contentSize)
         }
@@ -73,6 +84,20 @@ final class SettingsWindowController: NSWindowController {
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
     }
+
+    func stop() {
+        presentationState.isPresented = false
+        window?.close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        presentationState.isPresented = false
+    }
+}
+
+@MainActor
+private final class SettingsPresentationState: ObservableObject {
+    @Published var isPresented = false
 }
 
 private final class SettingsWindowBackgroundView: NSVisualEffectView {
@@ -80,8 +105,7 @@ private final class SettingsWindowBackgroundView: NSVisualEffectView {
         super.init(frame: frameRect)
         material = .underWindowBackground
         blendingMode = .behindWindow
-        state = .active
-        isEmphasized = true
+        state = .followsWindowActiveState
         wantsLayer = true
         layer?.isOpaque = false
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -96,6 +120,41 @@ private final class SettingsWindowBackgroundView: NSVisualEffectView {
 @MainActor
 private struct SettingsRootView: View {
     @ObservedObject var settings: AppSettings
+    let viewModel: SpaceViewModel
+    @ObservedObject var presentationState: SettingsPresentationState
+
+    var body: some View {
+        ZStack {
+            SettingsSurfaceBackground()
+                .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                Group {
+                    if presentationState.isPresented {
+                        SettingsLiveDemo(
+                            settings: settings,
+                            viewModel: viewModel
+                        )
+                    } else {
+                        Color.clear
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(height: SettingsSurfaceMetrics.demoHeight)
+                .ignoresSafeArea(.container, edges: .top)
+
+                SettingsControls(settings: settings)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(width: 540, height: 640)
+        .background(Color.clear)
+    }
+}
+
+@MainActor
+private struct SettingsLiveDemo: View {
+    @ObservedObject var settings: AppSettings
     @ObservedObject var viewModel: SpaceViewModel
 
     private var colorSlotCount: Int {
@@ -107,32 +166,18 @@ private struct SettingsRootView: View {
     }
 
     var body: some View {
-        ZStack {
-            SettingsSurfaceBackground()
-                .allowsHitTesting(false)
-
-            VStack(spacing: 0) {
-                InteractiveDemoZone(
-                    indicators: viewModel.indicatorKinds,
-                    currentActiveIndex: viewModel.activeIndex,
-                    colors: settings.indicatorColors(for: colorSlotCount),
-                    sizeScale: settings.indicatorSizeScale,
-                    spacingScale: settings.indicatorSpacingScale,
-                    showsThinOutline: settings.showsIndicatorOutline,
-                    shapeStyle: settings.indicatorShapeStyle,
-                    animationsEnabled: settings.animateIndicator,
-                    animationStyle: settings.indicatorAnimationStyle,
-                    setColor: settings.setIndicatorColor
-                )
-                .frame(height: SettingsSurfaceMetrics.demoHeight)
-                .ignoresSafeArea(.container, edges: .top)
-
-                SettingsControls(settings: settings)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .frame(width: 540, height: 640)
-        .background(Color.clear)
+        InteractiveDemoZone(
+            indicators: viewModel.indicatorKinds,
+            currentActiveIndex: viewModel.activeIndex,
+            colors: settings.indicatorColors(for: colorSlotCount),
+            sizeScale: settings.indicatorSizeScale,
+            spacingScale: settings.indicatorSpacingScale,
+            showsThinOutline: settings.showsIndicatorOutline,
+            shapeStyle: settings.indicatorShapeStyle,
+            animationsEnabled: settings.animateIndicator,
+            animationStyle: settings.indicatorAnimationStyle,
+            setColor: settings.setIndicatorColor
+        )
     }
 }
 
@@ -148,29 +193,39 @@ private enum SettingsSurfaceMetrics {
 
 private struct SettingsSurfaceBackground: View {
     private let opaqueBackground = Color(nsColor: .windowBackgroundColor)
+    @Environment(\.accessibilityReduceTransparency)
+    private var reduceTransparency
 
     var body: some View {
-        VStack(spacing: 0) {
-            Color.clear
-                .frame(height: SettingsSurfaceMetrics.transparentHeight)
+        Group {
+            if reduceTransparency {
+                opaqueBackground
+            } else {
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(
+                            height: SettingsSurfaceMetrics.transparentHeight
+                        )
 
-            LinearGradient(
-                colors: [
-                    .clear,
-                    opaqueBackground.opacity(0.04),
-                    opaqueBackground.opacity(0.12),
-                    opaqueBackground.opacity(0.26),
-                    opaqueBackground.opacity(0.46),
-                    opaqueBackground.opacity(0.70),
-                    opaqueBackground.opacity(0.88),
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            opaqueBackground.opacity(0.04),
+                            opaqueBackground.opacity(0.12),
+                            opaqueBackground.opacity(0.26),
+                            opaqueBackground.opacity(0.46),
+                            opaqueBackground.opacity(0.70),
+                            opaqueBackground.opacity(0.88),
+                            opaqueBackground
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: SettingsSurfaceMetrics.gradientHeight)
+
                     opaqueBackground
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: SettingsSurfaceMetrics.gradientHeight)
-
-            opaqueBackground
+                }
+            }
         }
         .ignoresSafeArea()
     }
@@ -182,62 +237,90 @@ private struct SettingsControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    SettingsSectionTitle(
-                        title: "Оформление",
-                        symbol: "circle.lefthalf.filled"
+            SettingsSection(
+                title: OrbitL10n.text(
+                    "settings.section.appearance",
+                    fallback: "Оформление"
+                ),
+                symbol: "circle.lefthalf.filled"
+            ) {
+                Button {
+                    settings.resetIndicatorColors()
+                } label: {
+                    Label(
+                        OrbitL10n.text(
+                            "settings.colors.reset",
+                            fallback: "Сбросить цвета"
+                        ),
+                        systemImage: "arrow.counterclockwise"
                     )
-                    Spacer()
-                    Button {
-                        settings.resetIndicatorColors()
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .accessibilityLabel("Сбросить цвета")
+                        .font(.caption)
                 }
-
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(settings.indicatorColors.isEmpty)
+                .help(
+                    OrbitL10n.text(
+                        "settings.colors.reset.help",
+                        fallback: "Вернуть системный цвет всем индикаторам"
+                    )
+                )
+            } content: {
                 SettingsGroup {
-                    DiscreteSliderRow(
-                        title: "Размер",
-                        value: Binding(
-                            get: { settings.indicatorSizeScale },
-                            set: { settings.setIndicatorSizeScale($0) }
-                        ),
-                        steps: AppSettings.indicatorSizeSteps
-                    )
+                    HStack(alignment: .top, spacing: 20) {
+                        DiscreteSliderColumn(
+                            title: OrbitL10n.text(
+                                "settings.size",
+                                fallback: "Размер"
+                            ),
+                            value: Binding(
+                                get: { settings.indicatorSizeScale },
+                                set: { settings.setIndicatorSizeScale($0) }
+                            ),
+                            steps: AppSettings.indicatorSizeSteps
+                        )
 
-                    DiscreteSliderRow(
-                        title: "Расстояние",
-                        value: Binding(
-                            get: { settings.indicatorSpacingScale },
-                            set: { settings.setIndicatorSpacingScale($0) }
-                        ),
-                        steps: AppSettings.indicatorSpacingSteps
-                    )
+                        DiscreteSliderColumn(
+                            title: OrbitL10n.text(
+                                "settings.spacing",
+                                fallback: "Расстояние"
+                            ),
+                            value: Binding(
+                                get: { settings.indicatorSpacingScale },
+                                set: { settings.setIndicatorSpacingScale($0) }
+                            ),
+                            steps: AppSettings.indicatorSpacingSteps
+                        )
+                    }
+                    .padding(.vertical, 4)
 
                     ShapeStyleRow(
                         selection: $settings.indicatorShapeStyle
                     )
 
                     SettingsToggleRow(
-                        title: "Обводка",
+                        title: OrbitL10n.text(
+                            "settings.outline",
+                            fallback: "Обводка"
+                        ),
                         isOn: $settings.showsIndicatorOutline
                     )
                 }
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsSectionTitle(
-                    title: "Поведение",
-                    symbol: "switch.2"
-                )
-
+            SettingsSection(
+                title: OrbitL10n.text(
+                    "settings.section.behavior",
+                    fallback: "Поведение"
+                ),
+                symbol: "switch.2"
+            ) {
                 SettingsGroup {
                     SettingsToggleRow(
-                        title: "Анимация",
+                        title: OrbitL10n.text(
+                            "settings.animation.enabled",
+                            fallback: "Анимация"
+                        ),
                         isOn: $settings.animateIndicator
                     )
 
@@ -247,7 +330,16 @@ private struct SettingsControls: View {
                     )
 
                     SettingsToggleRow(
-                        title: "Запускать при входе",
+                        title: OrbitL10n.text(
+                            "settings.launchAtLogin",
+                            fallback: "Запускать при входе…"
+                        ),
+                        statusText: settings.launchAtLoginState == .mixed
+                            ? OrbitL10n.text(
+                                "settings.launchAtLogin.requiresApproval",
+                                fallback: "Требует подтверждения"
+                            )
+                            : nil,
                         isOn: Binding(
                             get: { settings.launchAtLoginState == .on },
                             set: { _ in settings.toggleLaunchAtLogin() }
@@ -263,19 +355,69 @@ private struct SettingsControls: View {
                     .lineLimit(2)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        .padding(.horizontal, SettingsGridMetrics.windowHorizontalInset)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
     }
 }
 
 private enum SettingsGridMetrics {
+    static let windowHorizontalInset: CGFloat = 24
     static let labelWidth: CGFloat = 128
-    static let columnSpacing: CGFloat = 16
-    static let horizontalInset: CGFloat = 16
+    static let columnSpacing: CGFloat = 14
+    static let horizontalInset: CGFloat = 14
+    static let groupCornerRadius: CGFloat = 14
+}
+
+private struct SettingsSection<Trailing: View, Content: View>: View {
+    let title: String
+    let symbol: String
+    let trailing: Trailing
+    let content: Content
+
+    init(
+        title: String,
+        symbol: String,
+        @ViewBuilder trailing: () -> Trailing,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.symbol = symbol
+        self.trailing = trailing()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                SettingsSectionTitle(title: title, symbol: symbol)
+                Spacer(minLength: 8)
+                trailing
+            }
+
+            content
+        }
+    }
+}
+
+private extension SettingsSection where Trailing == EmptyView {
+    init(
+        title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(
+            title: title,
+            symbol: symbol,
+            trailing: { EmptyView() },
+            content: content
+        )
+    }
 }
 
 private struct SettingsGroup<Content: View>: View {
     let content: Content
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
@@ -286,13 +428,26 @@ private struct SettingsGroup<Content: View>: View {
             content
         }
         .padding(.horizontal, SettingsGridMetrics.horizontalInset)
+        .padding(.vertical, 5)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.035))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.075), lineWidth: 0.5)
+            RoundedRectangle(
+                cornerRadius: SettingsGridMetrics.groupCornerRadius,
+                style: .continuous
+            )
+            .fill(
+                Color.primary.opacity(
+                    colorSchemeContrast == .increased ? 0.08 : 0.04
+                )
+            )
+            .overlay {
+                if colorSchemeContrast == .increased {
+                    RoundedRectangle(
+                        cornerRadius: SettingsGridMetrics.groupCornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(Color.primary.opacity(0.20), lineWidth: 1)
+                }
+            }
         }
     }
 }
@@ -302,8 +457,9 @@ private struct SettingsRowLabel: View {
 
     var body: some View {
         Text(title)
-            .font(.callout)
+            .font(.system(size: 13, weight: .regular))
             .foregroundStyle(.primary)
+            .lineLimit(1)
             .frame(
                 width: SettingsGridMetrics.labelWidth,
                 alignment: .leading
@@ -314,34 +470,69 @@ private struct SettingsRowLabel: View {
 private struct SettingsSectionTitle: View {
     let title: String
     let symbol: String
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                .frame(width: 24, height: 24)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(
+                            Color.primary.opacity(
+                                colorSchemeContrast == .increased
+                                    ? 0.12
+                                    : 0.065
+                            )
+                        )
+                }
             Text(title)
-                .font(.headline)
+                .font(.system(size: 14, weight: .semibold))
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
 private struct SettingsToggleRow: View {
     let title: String
+    var statusText: String?
     @Binding var isOn: Bool
+
+    init(
+        title: String,
+        statusText: String? = nil,
+        isOn: Binding<Bool>
+    ) {
+        self.title = title
+        self.statusText = statusText
+        _isOn = isOn
+    }
 
     var body: some View {
         HStack(spacing: SettingsGridMetrics.columnSpacing) {
-            SettingsRowLabel(title: title)
+            Text(title)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .layoutPriority(1)
             Spacer(minLength: 0)
-            Toggle("", isOn: $isOn)
+            if let statusText {
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .accessibilityLabel(title)
         }
-        .frame(height: 42)
+        .frame(height: 38)
     }
 }
 
@@ -351,14 +542,19 @@ private struct AnimationStyleRow: View {
 
     var body: some View {
         HStack(spacing: SettingsGridMetrics.columnSpacing) {
-            SettingsRowLabel(title: "Стиль")
+            SettingsRowLabel(
+                title: OrbitL10n.text(
+                    "settings.animation.style",
+                    fallback: "Стиль"
+                )
+            )
             AnimationStyleSelector(
                 selection: $selection,
                 isEnabled: isEnabled
             )
             .frame(maxWidth: .infinity)
         }
-        .frame(height: 48)
+        .frame(height: 46)
     }
 }
 
@@ -367,11 +563,16 @@ private struct ShapeStyleRow: View {
 
     var body: some View {
         HStack(spacing: SettingsGridMetrics.columnSpacing) {
-            SettingsRowLabel(title: "Форма")
+            SettingsRowLabel(
+                title: OrbitL10n.text(
+                    "settings.shape",
+                    fallback: "Форма"
+                )
+            )
             ShapeStyleSelector(selection: $selection)
                 .frame(maxWidth: .infinity)
         }
-        .frame(height: 42)
+        .frame(height: 40)
     }
 }
 
@@ -379,10 +580,11 @@ private struct ShapeStyleSelector: View {
     @Binding var selection: IndicatorShapeStyle
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var hoveredStyle: IndicatorShapeStyle?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             ForEach(IndicatorShapeStyle.allCases) { style in
                 Button {
                     selection = style
@@ -397,19 +599,19 @@ private struct ShapeStyleSelector: View {
                             .minimumScaleFactor(0.84)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 5)
                     .contentShape(Rectangle())
                     .background {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(backgroundColor(for: style))
                             .overlay {
                                 RoundedRectangle(
-                                    cornerRadius: 8,
+                                    cornerRadius: 7,
                                     style: .continuous
                                 )
                                 .strokeBorder(
                                     borderColor(for: style),
-                                    lineWidth: 1
+                                    lineWidth: 0.75
                                 )
                             }
                     }
@@ -418,12 +620,35 @@ private struct ShapeStyleSelector: View {
                 .onHover { hovering in
                     hoveredStyle = hovering ? style : nil
                 }
-                .accessibilityLabel("Форма индикаторов: \(style.title)")
+                .accessibilityLabel(
+                    OrbitL10n.format(
+                        "settings.shape.option.accessibility",
+                        fallback: "Форма индикаторов: %@",
+                        style.title
+                    )
+                )
                 .accessibilityAddTraits(
                     selection == style ? .isSelected : []
                 )
             }
         }
+        .padding(3)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(
+                    Color.primary.opacity(
+                        colorSchemeContrast == .increased ? 0.09 : 0.045
+                    )
+                )
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            OrbitL10n.text(
+                "settings.shape.accessibility",
+                fallback: "Форма индикаторов"
+            )
+        )
+        .accessibilityValue(selection.title)
         .animation(
             OrbitMotion.selectionHover(reduceMotion: reduceMotion),
             value: hoveredStyle
@@ -476,15 +701,18 @@ private struct ShapeStyleSelector: View {
 
     private func backgroundColor(for style: IndicatorShapeStyle) -> Color {
         if selection == style {
-            return Color.accentColor.opacity(0.13)
+            return Color.accentColor.opacity(0.15)
         }
-        return Color.primary.opacity(hoveredStyle == style ? 0.065 : 0.025)
+        let hoverOpacity = colorSchemeContrast == .increased ? 0.12 : 0.06
+        return Color.primary.opacity(hoveredStyle == style ? hoverOpacity : 0)
     }
 
     private func borderColor(for style: IndicatorShapeStyle) -> Color {
         selection == style
-            ? Color.accentColor.opacity(0.28)
-            : Color.primary.opacity(hoveredStyle == style ? 0.12 : 0.07)
+            ? Color.accentColor.opacity(
+                colorSchemeContrast == .increased ? 0.62 : 0.25
+            )
+            : .clear
     }
 }
 
@@ -493,15 +721,16 @@ private struct AnimationStyleSelector: View {
     let isEnabled: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var hoveredStyle: IndicatorAnimationStyle?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             ForEach(IndicatorAnimationStyle.allCases) { style in
                 Button {
                     selection = style
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         animationPreview(for: style)
                             .accessibilityHidden(true)
                         Text(style.title)
@@ -511,16 +740,16 @@ private struct AnimationStyleSelector: View {
                             .minimumScaleFactor(0.84)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 5)
                     .contentShape(Rectangle())
                     .background {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(backgroundColor(for: style))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
                                     .strokeBorder(
                                         borderColor(for: style),
-                                        lineWidth: 1
+                                        lineWidth: 0.75
                                     )
                             }
                     }
@@ -529,10 +758,33 @@ private struct AnimationStyleSelector: View {
                 .onHover { hovering in
                     hoveredStyle = hovering ? style : nil
                 }
-                .accessibilityLabel("Стиль анимации: \(style.title)")
+                .accessibilityLabel(
+                    OrbitL10n.format(
+                        "settings.animation.option.accessibility",
+                        fallback: "Стиль анимации: %@",
+                        style.title
+                    )
+                )
                 .accessibilityAddTraits(selection == style ? .isSelected : [])
             }
         }
+        .padding(3)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(
+                    Color.primary.opacity(
+                        colorSchemeContrast == .increased ? 0.09 : 0.045
+                    )
+                )
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            OrbitL10n.text(
+                "settings.animation.style.accessibility",
+                fallback: "Стиль анимации"
+            )
+        )
+        .accessibilityValue(selection.title)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.45)
         .animation(
@@ -551,43 +803,47 @@ private struct AnimationStyleSelector: View {
     ) -> some View {
         switch style {
         case .seamless:
-            HStack(spacing: 2) {
+            HStack(spacing: 1.5) {
                 Circle()
-                    .fill(previewColor(for: style))
+                    .fill(previewColor(for: style).opacity(0.38))
                     .frame(width: 4, height: 4)
-                Capsule(style: .continuous)
-                    .fill(previewColor(for: style).opacity(0.68))
-                    .frame(width: 6, height: 5)
-                Capsule(style: .continuous)
-                    .fill(previewColor(for: style))
-                    .frame(width: 9, height: 6)
-            }
-            .frame(width: 23, height: 10)
-        case .continuous:
-            ZStack {
-                Capsule(style: .continuous)
-                    .fill(previewColor(for: style).opacity(0.32))
-                    .frame(width: 19, height: 5)
-                Circle()
-                    .fill(previewColor(for: style))
-                    .frame(width: 7, height: 7)
-                    .offset(x: -6)
-                Capsule(style: .continuous)
-                    .fill(previewColor(for: style))
-                    .frame(width: 12, height: 7)
-                    .offset(x: 5)
-            }
-            .frame(width: 23, height: 10)
-        case .classic:
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(previewColor(for: style))
-                    .frame(width: 6, height: 6)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(previewColor(for: style).opacity(0.66))
+                    .frame(width: 7, height: 5)
                 Capsule(style: .continuous)
                     .fill(previewColor(for: style))
                     .frame(width: 11, height: 6)
             }
-            .frame(width: 23, height: 10)
+            .frame(width: 27, height: 10)
+        case .continuous:
+            ZStack {
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 19, height: 2.5)
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 7, height: 7)
+                    .offset(x: -9)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 14, height: 8)
+                    .offset(x: 7)
+            }
+            .frame(width: 29, height: 10)
+        case .classic:
+            HStack(spacing: 2) {
+                Circle()
+                    .fill(previewColor(for: style))
+                    .frame(width: 5, height: 5)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 5, weight: .bold))
+                    .foregroundStyle(previewColor(for: style).opacity(0.72))
+                    .frame(width: 7)
+                Capsule(style: .continuous)
+                    .fill(previewColor(for: style))
+                    .frame(width: 10, height: 6)
+            }
+            .frame(width: 27, height: 10)
         }
     }
 
@@ -599,15 +855,18 @@ private struct AnimationStyleSelector: View {
         for style: IndicatorAnimationStyle
     ) -> Color {
         if selection == style {
-            return Color.accentColor.opacity(0.13)
+            return Color.accentColor.opacity(0.15)
         }
-        return Color.primary.opacity(hoveredStyle == style ? 0.065 : 0.025)
+        let hoverOpacity = colorSchemeContrast == .increased ? 0.12 : 0.06
+        return Color.primary.opacity(hoveredStyle == style ? hoverOpacity : 0)
     }
 
     private func borderColor(for style: IndicatorAnimationStyle) -> Color {
         selection == style
-            ? Color.accentColor.opacity(0.28)
-            : Color.primary.opacity(hoveredStyle == style ? 0.12 : 0.07)
+            ? Color.accentColor.opacity(
+                colorSchemeContrast == .increased ? 0.62 : 0.25
+            )
+            : .clear
     }
 }
 
@@ -618,6 +877,7 @@ private struct DemoVisualConfiguration: Equatable {
     let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
+    let increasedContrast: Bool
 }
 
 private struct InteractiveDemoZone: View {
@@ -635,6 +895,7 @@ private struct InteractiveDemoZone: View {
     let setColor: (NSColor, Int) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var activeIndex = 0
     @State private var hoveredIndex: Int?
     @State private var paletteIndex: Int?
@@ -672,7 +933,8 @@ private struct InteractiveDemoZone: View {
                         shapeStyle: configuration.shapeStyle,
                         animationsEnabled: configuration.animationsEnabled,
                         animationStyle: configuration.animationStyle,
-                        reduceMotion: reduceMotion
+                        reduceMotion: reduceMotion,
+                        increasedContrast: configuration.increasedContrast
                     )
 
                     HStack(spacing: 0) {
@@ -682,6 +944,21 @@ private struct InteractiveDemoZone: View {
                                 .contentShape(Rectangle())
                                 .overlay {
                                     PrimarySecondaryClickTarget(
+                                        accessibilityLabel:
+                                            indicatorAccessibilityLabel(
+                                                for: index
+                                            ),
+                                        accessibilityValue:
+                                            indicatorAccessibilityValue(
+                                                for: index
+                                            ),
+                                        accessibilityHelp:
+                                            indicatorAccessibilityHelp(
+                                                for: index
+                                            ),
+                                        accessibilityIdentifier:
+                                            "orbit.demo.indicator.\(index)",
+                                        isSelected: activeIndex == index,
                                         action: {
                                             select(index)
                                         },
@@ -694,9 +971,6 @@ private struct InteractiveDemoZone: View {
                                         }
                                     )
                                 }
-                                .accessibilityLabel(
-                                    indicatorAccessibilityLabel(for: index)
-                                )
                         }
                     }
                 }
@@ -705,27 +979,41 @@ private struct InteractiveDemoZone: View {
                 .popupClickProtected()
             }
 
-            if let paletteIndex, indicators.indices.contains(paletteIndex) {
-                IndicatorColorPalette(
-                    selectedColorID: PaletteColor.matchingID(
-                        for: color(for: indicators[paletteIndex])
-                    ),
-                    selectColor: { paletteColor in
-                        setColor(
-                            paletteColor.color,
-                            indicators[paletteIndex].colorIndex
-                        )
-                    }
-                )
-                .id(paletteIndex)
-                .offset(
-                    x: paletteHorizontalOffset(for: paletteIndex),
-                    y: -20
-                )
-                .popupClickProtected()
-                .transition(paletteTransition)
-                .zIndex(20)
+            GeometryReader { proxy in
+                if let paletteIndex, indicators.indices.contains(paletteIndex) {
+                    let anchorOffset = paletteHorizontalOffset(for: paletteIndex)
+                    let placement = PopupHorizontalPlacement.resolve(
+                        anchorOffset: anchorOffset,
+                        containerWidth: proxy.size.width,
+                        bubbleWidth: IndicatorColorPalette.width,
+                        horizontalInset:
+                            SettingsGridMetrics.windowHorizontalInset,
+                        pointerEdgeInset: IndicatorColorPalette.pointerEdgeInset
+                    )
+
+                    IndicatorColorPalette(
+                        selectedColorID: PaletteColor.matchingID(
+                            for: color(for: indicators[paletteIndex])
+                        ),
+                        pointerOffset: placement.pointerOffset,
+                        selectColor: { paletteColor in
+                            setColor(
+                                paletteColor.color,
+                                indicators[paletteIndex].colorIndex
+                            )
+                        }
+                    )
+                    .id(paletteIndex)
+                    .position(
+                        x: proxy.size.width / 2
+                            + placement.bubbleCenterOffset,
+                        y: proxy.size.height / 2 - 20
+                    )
+                    .popupClickProtected()
+                    .transition(paletteTransition)
+                }
             }
+            .zIndex(20)
 
             HStack(alignment: .top, spacing: 4) {
                 if isInfoPresented {
@@ -750,9 +1038,7 @@ private struct InteractiveDemoZone: View {
                         .overlay {
                             Circle()
                                 .strokeBorder(
-                                    Color.primary.opacity(
-                                        isInfoPresented ? 0.22 : 0.12
-                                    ),
+                                    Color.primary.opacity(infoBorderOpacity),
                                     lineWidth: 0.75
                                 )
                         }
@@ -761,9 +1047,22 @@ private struct InteractiveDemoZone: View {
                 .padding(.top, 8)
                 .onHover { isInfoHovered = $0 }
                 .popupClickProtected()
-                .accessibilityLabel("Справка по демонстрации")
+                .accessibilityLabel(
+                    OrbitL10n.text(
+                        "settings.demo.info.accessibility",
+                        fallback: "Справка по демонстрации"
+                    )
+                )
                 .accessibilityValue(
-                    isInfoPresented ? "Открыта" : "Закрыта"
+                    isInfoPresented
+                        ? OrbitL10n.text(
+                            "accessibility.state.open",
+                            fallback: "Открыта"
+                        )
+                        : OrbitL10n.text(
+                            "accessibility.state.closed",
+                            fallback: "Закрыта"
+                        )
                 )
             }
             .padding(.top, 14)
@@ -790,6 +1089,30 @@ private struct InteractiveDemoZone: View {
             .allowsHitTesting(false)
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            OrbitL10n.text(
+                "settings.demo.accessibility",
+                fallback: "Интерактивная демонстрация индикаторов"
+            )
+        )
+        .accessibilityAction(
+            named: OrbitL10n.text(
+                "settings.demo.previous.accessibility",
+                fallback: "Предыдущее пространство"
+            )
+        ) {
+            moveActive(by: -1)
+        }
+        .accessibilityAction(
+            named: OrbitL10n.text(
+                "settings.demo.next.accessibility",
+                fallback: "Следующее пространство"
+            )
+        ) {
+            moveActive(by: 1)
+        }
+        .onExitCommand(perform: dismissPopups)
         .simultaneousGesture(
             DragGesture(minimumDistance: 24)
                 .onEnded { value in
@@ -856,7 +1179,8 @@ private struct InteractiveDemoZone: View {
     }
 
     private func demoArtworkWidth(for sizeScale: CGFloat) -> CGFloat {
-        CGFloat(indicators.count) * StatusItemArtwork.itemWidth(
+        StatusItemArtwork.contentWidth(
+            for: indicators.count,
             sizeScale: sizeScale,
             spacingScale: CGFloat(configuration.spacingScale)
         )
@@ -892,7 +1216,8 @@ private struct InteractiveDemoZone: View {
             showsThinOutline: showsThinOutline,
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
-            animationStyle: animationStyle
+            animationStyle: animationStyle,
+            increasedContrast: colorSchemeContrast == .increased
         )
     }
 
@@ -984,10 +1309,52 @@ private struct InteractiveDemoZone: View {
     private func indicatorAccessibilityLabel(for index: Int) -> String {
         switch indicators[index] {
         case .desktop:
-            "Рабочий стол \(indicators[index].colorIndex + 1) — нажмите, чтобы изменить цвет"
+            let desktopOrdinal = indicators.prefix(index + 1)
+                .filter { !$0.isFullscreen }
+                .count
+            return OrbitL10n.format(
+                "settings.demo.desktop.accessibility",
+                fallback: "Рабочий стол %ld",
+                desktopOrdinal
+            )
         case .fullscreen:
-            "Полноэкранное приложение — используется цвет связанного рабочего стола"
+            return OrbitL10n.text(
+                "settings.demo.fullscreen.accessibility",
+                fallback: "Полноэкранное приложение"
+            )
         }
+    }
+
+    private func indicatorAccessibilityValue(for index: Int) -> String {
+        activeIndex == index
+            ? OrbitL10n.text(
+                "accessibility.state.current",
+                fallback: "Текущее"
+            )
+            : OrbitL10n.text(
+                "accessibility.state.inactive",
+                fallback: "Неактивное"
+            )
+    }
+
+    private func indicatorAccessibilityHelp(for index: Int) -> String {
+        if indicators[index].isFullscreen {
+            return OrbitL10n.text(
+                "settings.demo.fullscreen.help",
+                fallback: "Изменяет цвет связанного рабочего стола"
+            )
+        }
+        return OrbitL10n.text(
+            "settings.demo.desktop.help",
+            fallback: "Изменяет цвет индикатора"
+        )
+    }
+
+    private var infoBorderOpacity: Double {
+        if colorSchemeContrast == .increased {
+            return isInfoPresented ? 0.46 : 0.30
+        }
+        return isInfoPresented ? 0.22 : 0.12
     }
 
     private func toggleInfo() {
@@ -1112,12 +1479,36 @@ private struct PaletteColor: Identifiable {
     let color: NSColor
 
     static let choices: [PaletteColor] = [
-        PaletteColor(id: "red", title: "Красный", color: .systemRed),
-        PaletteColor(id: "orange", title: "Оранжевый", color: .systemOrange),
-        PaletteColor(id: "yellow", title: "Жёлтый", color: .systemYellow),
-        PaletteColor(id: "green", title: "Зелёный", color: .systemGreen),
-        PaletteColor(id: "blue", title: "Синий", color: .systemBlue),
-        PaletteColor(id: "purple", title: "Фиолетовый", color: .systemPurple)
+        PaletteColor(
+            id: "red",
+            title: OrbitL10n.text("color.red", fallback: "Красный"),
+            color: .systemRed
+        ),
+        PaletteColor(
+            id: "orange",
+            title: OrbitL10n.text("color.orange", fallback: "Оранжевый"),
+            color: .systemOrange
+        ),
+        PaletteColor(
+            id: "yellow",
+            title: OrbitL10n.text("color.yellow", fallback: "Жёлтый"),
+            color: .systemYellow
+        ),
+        PaletteColor(
+            id: "green",
+            title: OrbitL10n.text("color.green", fallback: "Зелёный"),
+            color: .systemGreen
+        ),
+        PaletteColor(
+            id: "blue",
+            title: OrbitL10n.text("color.blue", fallback: "Синий"),
+            color: .systemBlue
+        ),
+        PaletteColor(
+            id: "purple",
+            title: OrbitL10n.text("color.purple", fallback: "Фиолетовый"),
+            color: .systemPurple
+        )
     ]
 
     static func matchingID(for color: NSColor) -> String? {
@@ -1147,7 +1538,11 @@ private struct PaletteColor: Identifiable {
 }
 
 private struct IndicatorColorPalette: View {
+    static let width: CGFloat = 170
+    static let pointerEdgeInset: CGFloat = 29
+
     let selectedColorID: String?
+    let pointerOffset: CGFloat
     let selectColor: (PaletteColor) -> Void
 
     var body: some View {
@@ -1179,12 +1574,29 @@ private struct IndicatorColorPalette: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(choice.title)
+                .accessibilityValue(
+                    choice.id == selectedColorID
+                        ? OrbitL10n.text(
+                            "accessibility.state.selected",
+                            fallback: "Выбран"
+                        )
+                        : OrbitL10n.text(
+                            "accessibility.state.notSelected",
+                            fallback: "Не выбран"
+                        )
+                )
+                .accessibilityAddTraits(
+                    choice.id == selectedColorID ? .isSelected : []
+                )
             }
         }
         .padding(.horizontal, 14)
+        .frame(width: Self.width)
         .frame(height: 39)
         .padding(.bottom, 9)
-        .stableBubbleSurface(PaletteBubbleShape())
+        .stableBubbleSurface(
+            PaletteBubbleShape(pointerOffset: pointerOffset)
+        )
         .fixedSize()
     }
 
@@ -1192,7 +1604,12 @@ private struct IndicatorColorPalette: View {
 
 private struct DemoInfoBubble: View {
     var body: some View {
-        Text("Клик — изменить цвет\nСвайп двумя пальцами — листать")
+        Text(
+            OrbitL10n.text(
+                "settings.demo.info",
+                fallback: "Клик — изменить цвет\nСвайп двумя пальцами — листать"
+            )
+        )
             .font(.system(size: 11.5))
             .foregroundStyle(.primary)
             .lineSpacing(1)
@@ -1207,6 +1624,7 @@ private struct DemoInfoBubble: View {
 
 private struct StableBubbleSurface<Surface: Shape>: ViewModifier {
     let surface: Surface
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     func body(content: Content) -> some View {
         content
@@ -1214,7 +1632,9 @@ private struct StableBubbleSurface<Surface: Shape>: ViewModifier {
             .overlay {
                 surface
                     .stroke(
-                        Color.primary.opacity(0.13),
+                        Color.primary.opacity(
+                            colorSchemeContrast == .increased ? 0.30 : 0.13
+                        ),
                         style: StrokeStyle(
                             lineWidth: 1,
                             lineCap: .round,
@@ -1313,12 +1733,21 @@ private struct InfoBubbleShape: Shape {
 }
 
 private struct PaletteBubbleShape: Shape {
+    let pointerOffset: CGFloat
+
     func path(in rect: CGRect) -> Path {
         let pointerHeight: CGFloat = 9
         let bodyHeight = rect.height - pointerHeight
         let radius = bodyHeight / 2
         let curve: CGFloat = 0.552_284_8
         let pointerHalfWidth: CGFloat = 9
+        let pointerCenterX = min(
+            max(
+                rect.midX + pointerOffset,
+                rect.minX + radius + pointerHalfWidth
+            ),
+            rect.maxX - radius - pointerHalfWidth
+        )
         var path = Path()
         path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
         path.addLine(
@@ -1350,28 +1779,34 @@ private struct PaletteBubbleShape: Shape {
             )
         )
         path.addLine(
-            to: CGPoint(x: rect.midX + pointerHalfWidth, y: bodyHeight)
+            to: CGPoint(x: pointerCenterX + pointerHalfWidth, y: bodyHeight)
         )
         path.addCurve(
-            to: CGPoint(x: rect.midX + 1.6, y: rect.maxY - 1.2),
+            to: CGPoint(x: pointerCenterX + 1.6, y: rect.maxY - 1.2),
             control1: CGPoint(
-                x: rect.midX + 5.5,
+                x: pointerCenterX + 5.5,
                 y: bodyHeight + 0.2
             ),
-            control2: CGPoint(x: rect.midX + 3.2, y: rect.maxY - 1.8)
+            control2: CGPoint(
+                x: pointerCenterX + 3.2,
+                y: rect.maxY - 1.8
+            )
         )
         path.addQuadCurve(
-            to: CGPoint(x: rect.midX - 1.6, y: rect.maxY - 1.2),
-            control: CGPoint(x: rect.midX, y: rect.maxY + 0.5)
+            to: CGPoint(x: pointerCenterX - 1.6, y: rect.maxY - 1.2),
+            control: CGPoint(x: pointerCenterX, y: rect.maxY + 0.5)
         )
         path.addCurve(
             to: CGPoint(
-                x: rect.midX - pointerHalfWidth,
+                x: pointerCenterX - pointerHalfWidth,
                 y: bodyHeight
             ),
-            control1: CGPoint(x: rect.midX - 3.2, y: rect.maxY - 1.8),
+            control1: CGPoint(
+                x: pointerCenterX - 3.2,
+                y: rect.maxY - 1.8
+            ),
             control2: CGPoint(
-                x: rect.midX - 5.5,
+                x: pointerCenterX - 5.5,
                 y: bodyHeight + 0.2
             )
         )
@@ -1420,6 +1855,43 @@ private extension View {
             key: PopupClickProtectedKey.self,
             value: .bounds
         ) { [$0] }
+    }
+}
+
+struct PopupHorizontalPlacement: Equatable {
+    let bubbleCenterOffset: CGFloat
+    let pointerOffset: CGFloat
+
+    nonisolated static func resolve(
+        anchorOffset: CGFloat,
+        containerWidth: CGFloat,
+        bubbleWidth: CGFloat,
+        horizontalInset: CGFloat,
+        pointerEdgeInset: CGFloat
+    ) -> Self {
+        let maximumCenterOffset = max(
+            (containerWidth - bubbleWidth) / 2 - horizontalInset,
+            0
+        )
+        let bubbleCenterOffset = min(
+            max(anchorOffset, -maximumCenterOffset),
+            maximumCenterOffset
+        )
+        let maximumPointerOffset = max(
+            bubbleWidth / 2 - pointerEdgeInset,
+            0
+        )
+        let pointerOffset = min(
+            max(
+                anchorOffset - bubbleCenterOffset,
+                -maximumPointerOffset
+            ),
+            maximumPointerOffset
+        )
+        return Self(
+            bubbleCenterOffset: bubbleCenterOffset,
+            pointerOffset: pointerOffset
+        )
     }
 }
 
@@ -1548,16 +2020,34 @@ private struct PopupOutsideClickMonitor: NSViewRepresentable {
 }
 
 private struct PrimarySecondaryClickTarget: NSViewRepresentable {
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityHelp: String
+    let accessibilityIdentifier: String
+    let isSelected: Bool
     let action: () -> Void
     let onHover: (Bool) -> Void
 
     func makeNSView(context: Context) -> ClickView {
-        ClickView(action: action, onHover: onHover)
+        let view = ClickView(action: action, onHover: onHover)
+        configureAccessibility(for: view)
+        return view
     }
 
     func updateNSView(_ view: ClickView, context: Context) {
         view.action = action
         view.onHover = onHover
+        configureAccessibility(for: view)
+    }
+
+    private func configureAccessibility(for view: ClickView) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityLabel(accessibilityLabel)
+        view.setAccessibilityValue(accessibilityValue)
+        view.setAccessibilityHelp(accessibilityHelp)
+        view.setAccessibilityIdentifier(accessibilityIdentifier)
+        view.setAccessibilitySelected(isSelected)
     }
 
     final class ClickView: NSView {
@@ -1572,6 +2062,7 @@ private struct PrimarySecondaryClickTarget: NSViewRepresentable {
             self.action = action
             self.onHover = onHover
             super.init(frame: .zero)
+            focusRingType = .none
         }
 
         @available(*, unavailable)
@@ -1581,6 +2072,37 @@ private struct PrimarySecondaryClickTarget: NSViewRepresentable {
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
             true
+        }
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func becomeFirstResponder() -> Bool {
+            // SwiftUI can nominate the first representable view when the
+            // settings window opens. Show a focus ring only for an explicit
+            // keyboard traversal, never for that automatic initial focus or
+            // a pointer click.
+            focusRingType = NSApp.currentEvent?.type == .keyDown
+                && NSApp.currentEvent?.keyCode == 48
+                ? .default
+                : .none
+            return super.becomeFirstResponder()
+        }
+
+        override func resignFirstResponder() -> Bool {
+            focusRingType = .none
+            return super.resignFirstResponder()
+        }
+
+        override var focusRingMaskBounds: NSRect {
+            bounds.insetBy(dx: 3, dy: 7)
+        }
+
+        override func drawFocusRingMask() {
+            NSBezierPath(
+                roundedRect: focusRingMaskBounds,
+                xRadius: 8,
+                yRadius: 8
+            ).fill()
         }
 
         override func updateTrackingAreas() {
@@ -1611,11 +2133,27 @@ private struct PrimarySecondaryClickTarget: NSViewRepresentable {
         }
 
         override func mouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(nil)
             action()
         }
 
         override func rightMouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(nil)
             action()
+        }
+
+        override func keyDown(with event: NSEvent) {
+            switch event.keyCode {
+            case 36, 49: // Return and Space
+                action()
+            default:
+                super.keyDown(with: event)
+            }
+        }
+
+        override func accessibilityPerformPress() -> Bool {
+            action()
+            return true
         }
     }
 }
@@ -1735,14 +2273,17 @@ private struct TrackpadSwipeMonitor: NSViewRepresentable {
     }
 }
 
-private struct DiscreteSliderRow: View {
+private struct DiscreteSliderColumn: View {
     let title: String
     @Binding var value: Double
     let steps: [Double]
 
     var body: some View {
-        HStack(spacing: SettingsGridMetrics.columnSpacing) {
-            SettingsRowLabel(title: title)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.primary)
+
             DiscreteSlider(
                 value: $value,
                 steps: steps,
@@ -1751,7 +2292,7 @@ private struct DiscreteSliderRow: View {
             .frame(height: 25)
             .frame(maxWidth: .infinity)
         }
-        .frame(height: 48)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1776,6 +2317,7 @@ private struct DiscreteSlider: NSViewRepresentable {
         slider.tickMarkPosition = .below
         slider.allowsTickMarkValuesOnly = true
         slider.setAccessibilityLabel(accessibilityLabel)
+        updateAccessibilityValue(of: slider)
         return slider
     }
 
@@ -1783,6 +2325,21 @@ private struct DiscreteSlider: NSViewRepresentable {
         context.coordinator.parent = self
         slider.doubleValue = value
         slider.setAccessibilityLabel(accessibilityLabel)
+        updateAccessibilityValue(of: slider)
+    }
+
+    private func updateAccessibilityValue(of slider: NSSlider) {
+        let closestIndex = steps.indices.min { lhs, rhs in
+            abs(steps[lhs] - value) < abs(steps[rhs] - value)
+        } ?? steps.startIndex
+        slider.setAccessibilityValue(
+            OrbitL10n.format(
+                "settings.slider.accessibility.value",
+                fallback: "Деление %ld из %ld",
+                closestIndex + 1,
+                steps.count
+            )
+        )
     }
 
     @MainActor

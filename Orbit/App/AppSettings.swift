@@ -13,11 +13,20 @@ enum IndicatorAnimationStyle: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .seamless:
-            "Бесшовная"
+            OrbitL10n.text(
+                "settings.animation.seamless",
+                fallback: "Seamless"
+            )
         case .classic:
-            "Классическая"
+            OrbitL10n.text(
+                "settings.animation.classic",
+                fallback: "Classic"
+            )
         case .continuous:
-            "Непрерывная"
+            OrbitL10n.text(
+                "settings.animation.continuous",
+                fallback: "Continuous"
+            )
         }
     }
 
@@ -41,11 +50,20 @@ enum IndicatorShapeStyle: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .standard:
-            "Обычные"
+            OrbitL10n.text(
+                "settings.shape.standard",
+                fallback: "Standard"
+            )
         case .circles:
-            "Круги"
+            OrbitL10n.text(
+                "settings.shape.circles",
+                fallback: "Circles"
+            )
         case .roundedRectangles:
-            "Квадраты"
+            OrbitL10n.text(
+                "settings.shape.roundedRectangles",
+                fallback: "Rounded rectangles"
+            )
         }
     }
 }
@@ -222,6 +240,7 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
 
     func toggleLaunchAtLogin() {
         message = nil
+        defer { objectWillChange.send() }
         do {
             switch SMAppService.mainApp.status {
             case .enabled:
@@ -237,7 +256,11 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
                 try SMAppService.mainApp.register()
             }
         } catch {
-            message = "Не удалось изменить запуск при входе: \(error.localizedDescription)"
+            message = OrbitL10n.format(
+                "error.loginItem.update",
+                fallback: "Couldn't change launch at login: %@",
+                error.localizedDescription
+            )
         }
     }
 
@@ -292,6 +315,7 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
     }
 
     func colorSlots(for desktopIdentifiers: [Int64]) -> [Int64: Int] {
+        let previousSlots = desktopColorSlots
         let currentKeys = Set(desktopIdentifiers.map(String.init))
         desktopColorSlots = desktopColorSlots.filter {
             currentKeys.contains($0.key)
@@ -308,7 +332,9 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         }
 
         compactDesktopColorSlotsIfNeeded()
-        defaults.set(desktopColorSlots, forKey: Key.desktopColorSlots)
+        if desktopColorSlots != previousSlots {
+            defaults.set(desktopColorSlots, forKey: Key.desktopColorSlots)
+        }
         return Dictionary(
             uniqueKeysWithValues: desktopIdentifiers.compactMap { identifier in
                 desktopColorSlots[String(identifier)].map { (identifier, $0) }

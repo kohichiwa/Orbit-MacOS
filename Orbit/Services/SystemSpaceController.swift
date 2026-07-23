@@ -24,11 +24,20 @@ enum SystemSpaceControllerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .eventPostingPermissionRequired:
-            "Для переключения рабочих столов разрешите Orbit управление компьютером."
+            OrbitL10n.text(
+                "error.accessibility.permissionRequired",
+                fallback: "Allow Orbit to control your computer to switch desktops."
+            )
         case .eventCreationFailed:
-            "Не удалось отправить системную команду переключения."
+            OrbitL10n.text(
+                "error.spaceSwitch.commandFailed",
+                fallback: "Couldn't send the system command to switch desktops."
+            )
         case .automationPermissionRequired:
-            "Разрешите Orbit управлять System Events в разделе «Автоматизация» системных настроек."
+            OrbitL10n.text(
+                "error.automation.permissionRequired",
+                fallback: "Allow Orbit to control System Events in the Automation section of System Settings."
+            )
         }
     }
 }
@@ -55,21 +64,18 @@ final class SystemSpaceController: SpaceControlling {
             throw SystemSpaceControllerError.eventPostingPermissionRequired
         }
 
-        let keyCode = direction.keyCode
-        let failure: ScriptFailure? = await Task.detached(priority: .userInitiated) {
-            () -> ScriptFailure? in
-            let source = "tell application \"System Events\" to key code "
-                + "\(keyCode) using {control down}"
-            guard let script = NSAppleScript(source: source) else {
-                return ScriptFailure(code: 0)
-            }
-            var error: NSDictionary?
-            script.executeAndReturnError(&error)
-            guard let error else { return nil }
-            return ScriptFailure(
-                code: error[NSAppleScript.errorNumber] as? Int ?? 0
-            )
-        }.value
+        // NSAppleScript is explicitly main-thread-only. This controller is
+        // MainActor-isolated, so keep both construction and execution here.
+        let source = "tell application \"System Events\" to key code "
+            + "\(direction.keyCode) using {control down}"
+        guard let script = NSAppleScript(source: source) else {
+            throw SystemSpaceControllerError.eventCreationFailed
+        }
+        var error: NSDictionary?
+        script.executeAndReturnError(&error)
+        let failure = error.map {
+            ScriptFailure(code: $0[NSAppleScript.errorNumber] as? Int ?? 0)
+        }
 
         guard let failure else { return }
         if abs(failure.code) == 1743 {
