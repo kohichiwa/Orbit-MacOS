@@ -3,9 +3,13 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+private enum SettingsWindowMetrics {
+    static let contentSize = NSSize(width: 480, height: 640)
+}
+
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
-    private static let contentSize = NSSize(width: 540, height: 640)
+    private static let contentSize = SettingsWindowMetrics.contentSize
     private let presentationState: SettingsPresentationState
 
     init(
@@ -156,7 +160,10 @@ private struct SettingsRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 540, height: 640)
+        .frame(
+            width: SettingsWindowMetrics.contentSize.width,
+            height: SettingsWindowMetrics.contentSize.height
+        )
         .background(Color.clear)
     }
 }
@@ -257,27 +264,6 @@ private struct SettingsControls: View {
                 ),
                 symbol: "circle.lefthalf.filled"
             ) {
-                Button {
-                    settings.resetIndicatorColors()
-                } label: {
-                    Label(
-                        OrbitL10n.text(
-                            "settings.colors.reset",
-                            fallback: "Сбросить цвета"
-                        ),
-                        systemImage: "arrow.counterclockwise"
-                    )
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(settings.indicatorColors.isEmpty)
-                .help(
-                    OrbitL10n.text(
-                        "settings.colors.reset.help",
-                        fallback: "Вернуть системный цвет всем индикаторам"
-                    )
-                )
             } content: {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 20) {
@@ -320,6 +306,8 @@ private struct SettingsControls: View {
                     )
                 }
             }
+
+            SettingsSectionDivider()
 
             SettingsSection(
                 title: OrbitL10n.text(
@@ -379,6 +367,16 @@ private struct SettingsControls: View {
         .padding(.horizontal, SettingsGridMetrics.windowHorizontalInset)
         .padding(.top, 10)
         .padding(.bottom, 12)
+    }
+}
+
+private struct SettingsSectionDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.12))
+            .frame(height: 1)
+            .padding(.vertical, 2)
+            .accessibilityHidden(true)
     }
 }
 
