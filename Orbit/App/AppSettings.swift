@@ -75,6 +75,7 @@ enum VisualSettingsChange {
     case animationEnabled(Bool)
     case animationStyle
     case shapeStyle
+    case applicationsOnHover(Bool)
 }
 
 @MainActor
@@ -88,6 +89,7 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         static let indicatorSizeScale = "indicatorSizeScale"
         static let indicatorSpacingScale = "indicatorSpacingScale"
         static let showsIndicatorOutline = "showsIndicatorOutline"
+        static let showsApplicationsOnHover = "showsApplicationsOnHover"
         static let indicatorColorComponents = "indicatorColorComponents"
         static let indicatorColorsComponents = "indicatorColorsComponents"
         static let desktopColorSlots = "desktopColorSlotsBySpaceIdentifier"
@@ -161,6 +163,18 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         }
     }
 
+    @Published var showsApplicationsOnHover: Bool {
+        didSet {
+            defaults.set(
+                showsApplicationsOnHover,
+                forKey: Key.showsApplicationsOnHover
+            )
+            visualSettingsChanges.send(
+                .applicationsOnHover(showsApplicationsOnHover)
+            )
+        }
+    }
+
     @Published private(set) var indicatorColors: [NSColor] {
         didSet {
             defaults.set(
@@ -203,6 +217,11 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         showsIndicatorOutline = defaults.bool(
             forKey: Key.showsIndicatorOutline
         )
+        showsApplicationsOnHover = defaults.object(
+            forKey: Key.showsApplicationsOnHover
+        ) == nil
+            ? true
+            : defaults.bool(forKey: Key.showsApplicationsOnHover)
         indicatorColors = Self.storedIndicatorColors(in: defaults)
         if indicatorColors.isEmpty,
            let legacyColor = Self.storedIndicatorColor(in: defaults) {
@@ -218,6 +237,10 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         defaults.set(
             indicatorShapeStyle.rawValue,
             forKey: Key.indicatorShapeStyle
+        )
+        defaults.set(
+            showsApplicationsOnHover,
+            forKey: Key.showsApplicationsOnHover
         )
         defaults.set(
             indicatorColors.map(Self.colorComponents),

@@ -202,13 +202,25 @@ final class AppSettingsTests: XCTestCase {
         }
     }
 
-    func testThinOutlineDefaultsOffAndPersists() {
+    func testOutlineDefaultsOffAndPersists() {
         withSettings { settings, defaults in
             XCTAssertFalse(settings.showsIndicatorOutline)
 
             settings.showsIndicatorOutline = true
 
             XCTAssertTrue(AppSettings(defaults: defaults).showsIndicatorOutline)
+        }
+    }
+
+    func testApplicationsOnHoverDefaultsOnAndPersists() {
+        withSettings { settings, defaults in
+            XCTAssertTrue(settings.showsApplicationsOnHover)
+
+            settings.showsApplicationsOnHover = false
+
+            XCTAssertFalse(
+                AppSettings(defaults: defaults).showsApplicationsOnHover
+            )
         }
     }
 
@@ -269,6 +281,27 @@ final class AppSettingsTests: XCTestCase {
             OrbitMotion.hoverExitDuration,
             OrbitMotion.maximumFeedbackDuration
         )
+        XCTAssertLessThan(
+            OrbitMotion.applicationPreviewHoverDelay,
+            OrbitMotion.applicationPreviewEnterDuration
+        )
+        XCTAssertEqual(
+            OrbitMotion.applicationPreviewHoverDelay,
+            0.13,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(
+            OrbitMotion.applicationPreviewRefreshInterval,
+            OrbitMotion.applicationPreviewEnterDuration
+        )
+        XCTAssertLessThanOrEqual(
+            OrbitMotion.applicationPreviewEnterDuration,
+            OrbitMotion.maximumFeedbackDuration
+        )
+        XCTAssertLessThanOrEqual(
+            OrbitMotion.applicationPreviewExitDuration,
+            OrbitMotion.maximumFeedbackDuration
+        )
         XCTAssertLessThanOrEqual(
             OrbitMotion.selectionChangeDuration,
             OrbitMotion.maximumFeedbackDuration
@@ -289,6 +322,7 @@ final class AppSettingsTests: XCTestCase {
                 style: IndicatorAnimationStyle,
                 shape: IndicatorShapeStyle,
                 outlineEnabled: Bool,
+                applicationsOnHover: Bool,
                 colorCount: Int
             )] = []
             let cancellable = settings.visualSettingsChanges.sink { change in
@@ -300,6 +334,7 @@ final class AppSettingsTests: XCTestCase {
                     settings.indicatorAnimationStyle,
                     settings.indicatorShapeStyle,
                     settings.showsIndicatorOutline,
+                    settings.showsApplicationsOnHover,
                     settings.indicatorColors.count
                 ))
             }
@@ -311,8 +346,9 @@ final class AppSettingsTests: XCTestCase {
             settings.indicatorAnimationStyle = .classic
             settings.indicatorShapeStyle = .roundedRectangles
             settings.showsIndicatorOutline = true
+            settings.showsApplicationsOnHover = true
 
-            XCTAssertEqual(snapshots.count, 7)
+            XCTAssertEqual(snapshots.count, 8)
             XCTAssertEqual(snapshots[0].size, 1.2)
             XCTAssertEqual(snapshots[1].spacing, 1.25)
             XCTAssertEqual(snapshots[2].colorCount, 1)
@@ -320,6 +356,7 @@ final class AppSettingsTests: XCTestCase {
             XCTAssertEqual(snapshots[4].style, .classic)
             XCTAssertEqual(snapshots[5].shape, .roundedRectangles)
             XCTAssertTrue(snapshots[6].outlineEnabled)
+            XCTAssertTrue(snapshots[7].applicationsOnHover)
             withExtendedLifetime(cancellable) {}
         }
     }

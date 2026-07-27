@@ -1,5 +1,26 @@
 import AppKit
 
+nonisolated struct StatusResolvedPillAppearance {
+    let color: NSColor
+    let desktopOpacity: CGFloat
+    let fullscreenOpacity: CGFloat
+}
+
+nonisolated struct StatusInactiveIndicatorAppearance {
+    let opacity: CGFloat
+    let scale: CGFloat
+}
+
+/// A value snapshot of the pixels whose meaning changes during a Space
+/// transition. Geometry is sampled separately by `StatusPillMotion`; this
+/// snapshot lets an interrupted transition preserve color, fill/outline mix
+/// and dot visibility even when its new destination is a third Space.
+nonisolated struct StatusInterruptedTransitionPresentation {
+    let pill: StatusResolvedPillAppearance
+    let inactiveIndicators: [StatusInactiveIndicatorAppearance]
+    let applicationPreviewBaseSize: NSSize?
+}
+
 /// Owns the one image installed on `NSStatusBarButton`.
 ///
 /// Animation redraws a tiny, persistent bitmap representation in place. The
@@ -13,12 +34,22 @@ nonisolated final class StatusIndicatorImageRenderer {
     private(set) var pill: StatusPillFrame?
     private(set) var activeIndex: Int?
     private(set) var transitionSourceIndex: Int?
+    private(set) var interruptedTransitionPresentation:
+        StatusInterruptedTransitionPresentation?
     private(set) var hoverScales: [Int: CGSize] = [:]
     private(set) var presentation: StatusArtworkPresentation = .identity
+    private(set) var applicationPreviewFrame =
+        StatusApplicationPreviewFrame.hidden
+    private(set) var applicationPreviewTracksPill = false
+    private(set) var currentApplicationPreviewExtraWidth: CGFloat = 0
+    private(set) var currentContentScale: CGFloat = 1
+    private(set) var currentStatusItemWidth: CGFloat = 0
+    private var currentApplicationPreviewHitRange: ClosedRange<CGFloat>?
+    let applicationPreviewMaximumExtraWidth: CGFloat
     private let bitmap: NSBitmapImageRep
     private let indicatorKinds: [SpaceIndicatorKind]
-    private let indicatorColors: [NSColor]
-    private let showsThinOutline: Bool
+    private var indicatorColors: [NSColor]
+    private var showsDarkEdge: Bool
     private let increasedContrast: Bool
     private let shapeStyle: IndicatorShapeStyle
     private let sizeScale: CGFloat
@@ -27,22 +58,35 @@ nonisolated final class StatusIndicatorImageRenderer {
     private let horizontalPadding: CGFloat
     private let horizontalOverflowPadding: CGFloat
     private let dotDiameter: CGFloat
+    private let baseContentWidth: CGFloat
+    private let baseStatusItemWidth: CGFloat
+    private let maximumVisibleContentWidth: CGFloat?
+    private var applicationPreviewIndex: Int?
+    private var applicationIcons: [NSImage]
+    private let maximumApplicationPreviewIconCount: Int
+    private let applicationPreviewScale: CGFloat
+    private let applicationIconSize: CGFloat
     private let scale: CGFloat = 2
 
     init(
         count: Int,
         indicatorKinds: [SpaceIndicatorKind]? = nil,
         indicatorColors: [NSColor] = [.controlAccentColor],
-        showsThinOutline: Bool = false,
+        showsDarkEdge: Bool = false,
         shapeStyle: IndicatorShapeStyle = .standard,
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1,
         imageHeight: CGFloat = StatusItemArtwork.imageHeight,
         horizontalOverflowPadding: CGFloat = 0,
-        increasedContrast: Bool = false
+        increasedContrast: Bool = false,
+        applicationPreviewIndex: Int? = nil,
+        applicationIcons: [NSImage] = [],
+        maximumApplicationPreviewIconCount: Int = 0,
+        maximumVisibleContentWidth: CGFloat? = nil
     ) {
-        self.count = max(count, 1)
-        self.showsThinOutline = showsThinOutline
+        let normalizedCount = max(count, 1)
+        self.count = normalizedCount
+        self.showsDarkEdge = showsDarkEdge
         self.increasedContrast = increasedContrast
         self.shapeStyle = shapeStyle
         self.sizeScale = sizeScale
@@ -59,9 +103,67 @@ nonisolated final class StatusIndicatorImageRenderer {
             0
         )
         dotDiameter = StatusItemArtwork.dotDiameter(sizeScale: sizeScale)
-        let normalizedKinds = indicatorKinds?.count == self.count
+        applicationPreviewScale = min(
+            max(sizeScale, 0.01),
+            max(
+                imageHeight / StatusApplicationPreviewLayout.pillHeight,
+                0.01
+            )
+        )
+        applicationIconSize =
+            StatusApplicationPreviewLayout.iconSize
+            * applicationPreviewScale
+        let previewIconCapacity = max(
+            maximumApplicationPreviewIconCount,
+            applicationIcons.count
+        )
+        self.maximumApplicationPreviewIconCount = previewIconCapacity
+        let normalizedIcons = Array(
+            applicationIcons.prefix(previewIconCapacity)
+        )
+        let normalizedPreviewIndex = applicationPreviewIndex.flatMap {
+            (0..<normalizedCount).contains($0) && !normalizedIcons.isEmpty
+                ? $0
+                : nil
+        }
+        self.applicationPreviewIndex = normalizedPreviewIndex
+        self.applicationIcons = normalizedPreviewIndex == nil
+            ? []
+            : normalizedIcons
+        let baseContentWidth = StatusItemArtwork.contentWidth(
+            for: normalizedCount,
+            sizeScale: sizeScale,
+            spacingScale: spacingScale
+        )
+        self.baseContentWidth = baseContentWidth
+        baseStatusItemWidth = StatusItemArtwork.preferredWidth(
+            for: normalizedCount,
+            sizeScale: sizeScale,
+            spacingScale: spacingScale
+        )
+        self.maximumVisibleContentWidth = maximumVisibleContentWidth.map {
+            max($0, 0.01)
+        }
+        let unconstrainedPreviewExtraWidth =
+            Self.applicationPreviewMaximumExtraWidth(
+                sizeScale: sizeScale,
+                iconCount: previewIconCapacity
+            )
+        if let maximumVisibleContentWidth = self.maximumVisibleContentWidth {
+            applicationPreviewMaximumExtraWidth = min(
+                unconstrainedPreviewExtraWidth,
+                max(
+                    maximumVisibleContentWidth - baseStatusItemWidth,
+                    0
+                )
+            )
+        } else {
+            applicationPreviewMaximumExtraWidth =
+                unconstrainedPreviewExtraWidth
+        }
+        let normalizedKinds = indicatorKinds?.count == normalizedCount
             ? indicatorKinds!
-            : (0..<self.count).map { .desktop(colorIndex: $0) }
+            : (0..<normalizedCount).map { .desktop(colorIndex: $0) }
         let fixedColors = indicatorColors.isEmpty
             ? [Self.fixedSRGBColor(from: .controlAccentColor)]
             : indicatorColors.map(Self.fixedSRGBColor)
@@ -73,11 +175,8 @@ nonisolated final class StatusIndicatorImageRenderer {
                 : fixedColors[0]
         }
         imageSize = NSSize(
-            width: StatusItemArtwork.contentWidth(
-                for: self.count,
-                sizeScale: sizeScale,
-                spacingScale: spacingScale
-            )
+            width: baseContentWidth
+                + applicationPreviewMaximumExtraWidth
                 + self.horizontalOverflowPadding * 2,
             height: imageHeight
         )
@@ -105,15 +204,69 @@ nonisolated final class StatusIndicatorImageRenderer {
         image.isTemplate = false
         self.image = image
 
+        currentStatusItemWidth = baseStatusItemWidth
         redraw()
+    }
+
+    func setApplicationPreview(
+        index: Int?,
+        icons: [NSImage]
+    ) {
+        let normalizedIcons = Array(
+            icons.prefix(maximumApplicationPreviewIconCount)
+        )
+        applicationPreviewIndex = index.flatMap {
+            (0..<count).contains($0) && !normalizedIcons.isEmpty
+                ? $0
+                : nil
+        }
+        applicationIcons = applicationPreviewIndex == nil
+            ? []
+            : normalizedIcons
+    }
+
+    func setIndicatorColors(_ colors: [NSColor]) {
+        let fixedColors = colors.isEmpty
+            ? [Self.fixedSRGBColor(from: .controlAccentColor)]
+            : colors.map(Self.fixedSRGBColor)
+        indicatorColors = indicatorKinds.map { kind in
+            let colorIndex = kind.colorIndex
+            return fixedColors.indices.contains(colorIndex)
+                ? fixedColors[colorIndex]
+                : fixedColors[0]
+        }
+    }
+
+    func setShowsDarkEdge(_ isVisible: Bool) {
+        showsDarkEdge = isVisible
+    }
+
+    static func applicationPreviewMaximumExtraWidth(
+        sizeScale: CGFloat,
+        iconCount: Int
+    ) -> CGFloat {
+        guard iconCount > 0 else { return 0 }
+        let targetSize = StatusApplicationPreviewLayout.targetSize(
+            iconCount: iconCount,
+            scale: sizeScale
+        )
+        return max(
+            targetSize.width * 1.055
+                - StatusItemArtwork.dotDiameter(sizeScale: sizeScale),
+            0
+        )
     }
 
     func update(
         pill: StatusPillFrame?,
         activeIndex: Int? = nil,
         transitionSourceIndex: Int? = nil,
+        interruptedTransitionPresentation:
+            StatusInterruptedTransitionPresentation? = nil,
         hoverScales: [Int: CGSize] = [:],
-        presentation: StatusArtworkPresentation = .identity
+        presentation: StatusArtworkPresentation = .identity,
+        applicationPreviewFrame: StatusApplicationPreviewFrame = .hidden,
+        applicationPreviewTracksPill: Bool = false
     ) {
         self.pill = pill
         self.activeIndex = activeIndex.flatMap {
@@ -122,13 +275,216 @@ nonisolated final class StatusIndicatorImageRenderer {
         self.transitionSourceIndex = transitionSourceIndex.flatMap {
             (0..<count).contains($0) ? $0 : nil
         }
+        self.interruptedTransitionPresentation =
+            interruptedTransitionPresentation
         self.hoverScales = hoverScales.filter {
             (0..<count).contains($0.key)
                 && $0.value.width > 0
                 && $0.value.height > 0
         }
         self.presentation = presentation
+        self.applicationPreviewFrame = applicationPreviewFrame
+        self.applicationPreviewTracksPill =
+            applicationPreviewTracksPill
         redraw()
+    }
+
+    func transitionPresentationSnapshot(
+        for pill: StatusPillFrame
+    ) -> StatusInterruptedTransitionPresentation? {
+        if
+            let interruptedTransitionPresentation,
+            let activeIndex
+        {
+            return resolvedInterruptedTransitionPresentation(
+                from: interruptedTransitionPresentation,
+                targetIndex: activeIndex,
+                progress: pill.progress
+            )
+        }
+
+        guard
+            let pillIndex = activeIndex ?? inferredIndex(for: pill),
+            indicatorKinds.indices.contains(pillIndex)
+        else { return nil }
+
+        let transition = transitionState(for: pill)
+        let pillAppearance: StatusResolvedPillAppearance
+        if let transition {
+            pillAppearance = resolvedTransitioningPillAppearance(
+                sourceIndex: transition.sourceIndex,
+                targetIndex: transition.targetIndex,
+                progress: transition.progress
+            )
+        } else {
+            pillAppearance = restingPillAppearance(at: pillIndex)
+        }
+
+        let hiddenActiveIndex = transition == nil ? pillIndex : nil
+        let inactiveIndicators = (0..<count).map { index in
+            if index == hiddenActiveIndex {
+                return StatusInactiveIndicatorAppearance(
+                    opacity: 0,
+                    scale: 0.58
+                )
+            }
+            let presentation = inactivePresentation(
+                at: index,
+                transition: transition
+            )
+            return StatusInactiveIndicatorAppearance(
+                opacity: presentation.opacity,
+                scale: presentation.scale
+            )
+        }
+
+        return StatusInterruptedTransitionPresentation(
+            pill: pillAppearance,
+            inactiveIndicators: inactiveIndicators,
+            applicationPreviewBaseSize: applicationPreviewBaseSize(
+                pill: pill,
+                pillIndex: pillIndex,
+                transition: transition
+            )
+        )
+    }
+
+    func resolvedInterruptedTransitionPresentation(
+        from initial: StatusInterruptedTransitionPresentation,
+        targetIndex: Int,
+        progress: CGFloat
+    ) -> StatusInterruptedTransitionPresentation {
+        guard indicatorKinds.indices.contains(targetIndex) else {
+            return initial
+        }
+        let progress = min(max(progress, 0), 1)
+        let targetPill = restingPillAppearance(at: targetIndex)
+        let inactiveIndicators = (0..<count).map { index in
+            let initialIndicator = initial.inactiveIndicators.indices
+                .contains(index)
+                ? initial.inactiveIndicators[index]
+                : StatusInactiveIndicatorAppearance(
+                    opacity: 1,
+                    scale: 1
+                )
+            let targetIndicator = StatusInactiveIndicatorAppearance(
+                opacity: index == targetIndex ? 0 : 1,
+                scale: index == targetIndex ? 0.58 : 1
+            )
+            return StatusInactiveIndicatorAppearance(
+                opacity: interpolate(
+                    initialIndicator.opacity,
+                    targetIndicator.opacity,
+                    progress
+                ),
+                scale: interpolate(
+                    initialIndicator.scale,
+                    targetIndicator.scale,
+                    progress
+                )
+            )
+        }
+
+        let previewBaseSize: NSSize?
+        if
+            let initialPreviewBaseSize =
+                initial.applicationPreviewBaseSize,
+            let applicationPreviewIndex
+        {
+            let targetPreviewBaseSize =
+                applicationPreviewIndex == targetIndex
+                    ? activePreviewBaseSize
+                    : inactivePreviewBaseSize(
+                        at: applicationPreviewIndex
+                    )
+            previewBaseSize = interpolatedPreviewBaseSize(
+                from: initialPreviewBaseSize,
+                to: targetPreviewBaseSize,
+                progress: progress
+            )
+        } else {
+            previewBaseSize = nil
+        }
+
+        return StatusInterruptedTransitionPresentation(
+            pill: StatusResolvedPillAppearance(
+                color: interpolatedColor(
+                    from: initial.pill.color,
+                    to: targetPill.color,
+                    progress: progress
+                ),
+                desktopOpacity: interpolate(
+                    initial.pill.desktopOpacity,
+                    targetPill.desktopOpacity,
+                    progress
+                ),
+                fullscreenOpacity: interpolate(
+                    initial.pill.fullscreenOpacity,
+                    targetPill.fullscreenOpacity,
+                    progress
+                )
+            ),
+            inactiveIndicators: inactiveIndicators,
+            applicationPreviewBaseSize: previewBaseSize
+        )
+    }
+
+    func indicatorIndex(atImageX x: CGFloat) -> Int? {
+        let x = unscaledLayoutX(fromRenderedImageX: x)
+        // Changing an NSStatusItem's width moves its local coordinate system.
+        // Preserve the hovered identity across that relayout by accepting both
+        // the expanding visual shape and the original indicator cell. Without
+        // this, a stationary pointer can be classified as the next indicator
+        // for one frame and immediately dismiss the preview.
+        if let applicationPreviewIndex,
+           let currentApplicationPreviewHitRange,
+           currentApplicationPreviewHitRange.contains(x) {
+            return applicationPreviewIndex
+        }
+
+        let centers = (0..<count).map {
+            layoutCenterX(
+                for: $0,
+                extraWidth: currentApplicationPreviewExtraWidth
+            )
+        }
+        guard
+            let first = centers.first,
+            let last = centers.last,
+            x >= first - edgeItemWidth / 2,
+            x < last + edgeItemWidth / 2
+        else { return nil }
+
+        return centers.enumerated().min {
+            abs($0.element - x) < abs($1.element - x)
+        }?.offset
+    }
+
+    func indicatorCenterX(at index: Int) -> CGFloat? {
+        guard (0..<count).contains(index) else { return nil }
+        // Pill motion is rendered inside the same content-scale transform as
+        // the rest of the artwork. Keep its trajectory in layout coordinates;
+        // returning an already-scaled value makes the moving pill jump when
+        // the application preview changes the fitted content scale.
+        return layoutCenterX(
+            for: index,
+            extraWidth: currentApplicationPreviewExtraWidth
+        )
+    }
+
+    func renderedIndicatorCenterX(at index: Int) -> CGFloat? {
+        guard (0..<count).contains(index) else { return nil }
+        return renderedImageX(
+            fromUnscaledLayoutX: layoutCenterX(
+                for: index,
+                extraWidth: currentApplicationPreviewExtraWidth
+            )
+        )
+    }
+
+    var applicationPreviewTargetExtraWidth: CGFloat {
+        guard applicationPreviewIndex != nil else { return 0 }
+        return max(applicationPreviewTargetSize.width - dotDiameter, 0)
     }
 
     private func redraw() {
@@ -150,6 +506,52 @@ nonisolated final class StatusIndicatorImageRenderer {
             )
         )
 
+        // Keep these pixels appearance-independent. A template image would be
+        // re-tinted by AppKit while the menu bar itself crossfades between
+        // Spaces, producing one mismatched frame during an active animation.
+        let transition = transitionState(for: pill)
+        let pillIndex = pill.map {
+            activeIndex ?? inferredIndex(for: $0) ?? 0
+        }
+        let resolvedInterruptedPresentation:
+            StatusInterruptedTransitionPresentation? = {
+                guard
+                    let initial = interruptedTransitionPresentation,
+                    let pill,
+                    let activeIndex
+                else { return nil }
+                return resolvedInterruptedTransitionPresentation(
+                    from: initial,
+                    targetIndex: activeIndex,
+                    progress: pill.progress
+                )
+            }()
+        let previewFollowsPill =
+            applicationPreviewTracksPill && pill != nil
+        let previewGeometry = applicationPreviewGeometry(
+            pill: pill,
+            pillIndex: pillIndex,
+            transition: transition,
+            baseSizeOverride:
+                resolvedInterruptedPresentation?
+                    .applicationPreviewBaseSize,
+            followsPill: previewFollowsPill
+        )
+        currentApplicationPreviewExtraWidth = previewGeometry?.extraWidth ?? 0
+        currentContentScale = fittedContentScale(
+            extraWidth: currentApplicationPreviewExtraWidth
+        )
+        let outerPadding = max(
+            baseStatusItemWidth - baseContentWidth,
+            0
+        )
+        currentStatusItemWidth = outerPadding
+            + (baseContentWidth + currentApplicationPreviewExtraWidth)
+                * currentContentScale
+        currentApplicationPreviewHitRange = previewGeometry.map {
+            applicationPreviewHitRange(for: $0)
+        }
+
         graphics.saveGState()
         defer { graphics.restoreGState() }
         graphics.setAlpha(min(max(presentation.opacity, 0), 1))
@@ -159,8 +561,8 @@ nonisolated final class StatusIndicatorImageRenderer {
         )
         graphics.translateBy(x: center.x, y: center.y)
         graphics.scaleBy(
-            x: max(presentation.scaleX, 0.001),
-            y: max(presentation.scaleY, 0.001)
+            x: max(presentation.scaleX * currentContentScale, 0.001),
+            y: max(presentation.scaleY * currentContentScale, 0.001)
         )
         graphics.translateBy(x: -center.x, y: -center.y)
 
@@ -168,25 +570,38 @@ nonisolated final class StatusIndicatorImageRenderer {
         // pixelsWide/pixelsHigh. Scaling it again makes the artwork 4x and
         // clips the right-hand dots and pill at the image boundary.
 
-        // Keep these pixels appearance-independent. A template image would be
-        // re-tinted by AppKit while the menu bar itself crossfades between
-        // Spaces, producing one mismatched frame during an active animation.
-        let transition = transitionState(for: pill)
-        let hiddenActiveIndex = transition == nil
+        let hiddenActiveIndex =
+            resolvedInterruptedPresentation == nil && transition == nil
             ? pill.flatMap { activeIndex ?? inferredIndex(for: $0) }
             : nil
         for index in 0..<count {
-            guard index != hiddenActiveIndex else { continue }
+            guard
+                index != hiddenActiveIndex,
+                index != applicationPreviewIndex
+                    || previewFollowsPill
+            else { continue }
             let center = NSPoint(
-                x: horizontalOverflowPadding
-                    + edgeItemWidth / 2
-                    + CGFloat(index) * itemWidth,
+                x: layoutCenterX(
+                    for: index,
+                    extraWidth: currentApplicationPreviewExtraWidth
+                ),
                 y: imageSize.height / 2
             )
-            let presentation = inactivePresentation(
-                at: index,
-                transition: transition
-            )
+            let presentation: (opacity: CGFloat, scale: CGFloat)
+            if
+                let resolvedInterruptedPresentation,
+                resolvedInterruptedPresentation.inactiveIndicators.indices
+                    .contains(index)
+            {
+                let resolved = resolvedInterruptedPresentation
+                    .inactiveIndicators[index]
+                presentation = (resolved.opacity, resolved.scale)
+            } else {
+                presentation = inactivePresentation(
+                    at: index,
+                    transition: transition
+                )
+            }
             drawInactiveIndicator(
                 at: center,
                 index: index,
@@ -195,49 +610,489 @@ nonisolated final class StatusIndicatorImageRenderer {
             )
         }
 
-        guard let pill else { return }
-        let pillIndex = activeIndex ?? inferredIndex(for: pill) ?? 0
-        let hoverScale = pillHoverScale(
-            for: pillIndex,
-            pill: pill
-        )
-        let activeSize = shapeStyle.activeIndicatorSize(
-            sizeScale: sizeScale
-        )
-
-        // Hover belongs to the destination indicator, not to the temporary
-        // liquid bridge. Scaling the complete bridge makes an edge-to-edge
-        // continuous transition grow beyond the bitmap on both sides and its
-        // rounded caps are then clipped by AppKit. Add only the destination
-        // indicator's local hover delta so the same feedback remains visible
-        // without changing the bridge's span.
-        let width = pill.width
-            + activeSize.width * (hoverScale.width - 1)
-        let height = pill.height
-            + activeSize.height * (hoverScale.height - 1)
-        let centerX = pill.x - horizontalPadding
-            + horizontalOverflowPadding
-        let rect = NSRect(
-            x: centerX - width / 2,
-            y: (imageSize.height - height) / 2,
-            width: width,
-            height: height
-        )
-        if let transition {
-            drawTransitioningPill(
-                in: rect,
-                sourceIndex: transition.sourceIndex,
-                targetIndex: transition.targetIndex,
-                progress: transition.progress,
-                waist: pill.waist
+        if
+            let pill,
+            let pillIndex,
+            pillIndex != applicationPreviewIndex
+                && !previewFollowsPill
+        {
+            let hoverScale = pillHoverScale(
+                for: pillIndex,
+                pill: pill
             )
-        } else {
-            drawActiveIndicator(
-                in: rect,
-                kind: indicatorKinds[pillIndex],
-                color: indicatorColors[pillIndex]
+            let activeSize = shapeStyle.activeIndicatorSize(
+                sizeScale: sizeScale
+            )
+
+            // Hover belongs to the destination indicator, not to the temporary
+            // liquid bridge. Scaling the complete bridge makes an edge-to-edge
+            // continuous transition grow beyond the bitmap on both sides and
+            // its rounded caps are then clipped by AppKit.
+            let width = pill.width
+                + activeSize.width * (hoverScale.width - 1)
+            let height = pill.height
+                + activeSize.height * (hoverScale.height - 1)
+            let centerX = layoutX(
+                forBaseContentX: pill.x - horizontalPadding,
+                extraWidth: currentApplicationPreviewExtraWidth
+            )
+            let rect = NSRect(
+                x: centerX - width / 2,
+                y: (imageSize.height - height) / 2,
+                width: width,
+                height: height
+            )
+            if let resolvedInterruptedPresentation {
+                drawResolvedPillAppearance(
+                    in: rect,
+                    appearance: resolvedInterruptedPresentation.pill,
+                    waist: pill.waist
+                )
+            } else if let transition {
+                drawTransitioningPill(
+                    in: rect,
+                    sourceIndex: transition.sourceIndex,
+                    targetIndex: transition.targetIndex,
+                    progress: transition.progress,
+                    waist: pill.waist
+                )
+            } else {
+                drawActiveIndicator(
+                    in: rect,
+                    kind: indicatorKinds[pillIndex],
+                    color: indicatorColors[pillIndex]
+                )
+            }
+        }
+
+        if let previewGeometry, let applicationPreviewIndex {
+            drawApplicationPreview(
+                geometry: previewGeometry,
+                index: applicationPreviewIndex,
+                isActive: pillIndex == applicationPreviewIndex,
+                followsPill: previewFollowsPill,
+                pillIndex: pillIndex,
+                pill: pill,
+                transition: transition,
+                resolvedInterruptedPresentation:
+                    resolvedInterruptedPresentation
             )
         }
+    }
+
+    private struct ApplicationPreviewGeometry {
+        let rect: NSRect
+        let extraWidth: CGFloat
+    }
+
+    private var applicationPreviewTargetSize: NSSize {
+        StatusApplicationPreviewLayout.targetSize(
+            iconCount: applicationIcons.count,
+            scale: applicationPreviewScale
+        )
+    }
+
+    private var applicationIconSpacing: CGFloat {
+        StatusApplicationPreviewLayout.iconSpacing
+            * applicationPreviewScale
+    }
+
+    private func applicationPreviewGeometry(
+        pill: StatusPillFrame?,
+        pillIndex: Int?,
+        transition: (sourceIndex: Int, targetIndex: Int, progress: CGFloat)?,
+        baseSizeOverride: NSSize?,
+        followsPill: Bool
+    ) -> ApplicationPreviewGeometry? {
+        guard let index = applicationPreviewIndex else { return nil }
+
+        let baseSize: NSSize
+        if followsPill, let pill {
+            baseSize = NSSize(
+                width: pill.width,
+                height: pill.height
+            )
+        } else {
+            baseSize = baseSizeOverride
+                ?? applicationPreviewBaseSize(
+                    pill: pill,
+                    pillIndex: pillIndex,
+                    transition: transition
+                )
+                ?? inactivePreviewBaseSize(at: index)
+        }
+
+        let expansion = max(applicationPreviewFrame.expansion, 0)
+        let extraWidth = applicationPreviewTargetExtraWidth * expansion
+        let heightProgress = min(expansion, 1)
+        let width = baseSize.width
+            + (applicationPreviewTargetSize.width - baseSize.width)
+                * heightProgress
+        var height = baseSize.height
+            + (applicationPreviewTargetSize.height - baseSize.height)
+                * heightProgress
+        if expansion > 1 {
+            height *= 1 - min((expansion - 1) * 0.55, 0.035)
+        }
+        let centerX: CGFloat
+        if followsPill, let pill {
+            centerX = layoutX(
+                forBaseContentX: pill.x - horizontalPadding,
+                extraWidth: extraWidth
+            )
+        } else {
+            centerX = layoutCenterX(
+                for: index,
+                extraWidth: extraWidth
+            )
+        }
+        let center = NSPoint(
+            x: centerX,
+            y: imageSize.height / 2
+        )
+        return ApplicationPreviewGeometry(
+            rect: NSRect(
+                x: center.x - width / 2,
+                y: center.y - height / 2,
+                width: width,
+                height: height
+            ),
+            extraWidth: extraWidth
+        )
+    }
+
+    private func applicationPreviewBaseSize(
+        pill: StatusPillFrame?,
+        pillIndex: Int?,
+        transition: (sourceIndex: Int, targetIndex: Int, progress: CGFloat)?
+    ) -> NSSize? {
+        guard let index = applicationPreviewIndex else { return nil }
+
+        if let transition, transition.sourceIndex == index {
+            return interpolatedPreviewBaseSize(
+                from: activePreviewBaseSize,
+                to: inactivePreviewBaseSize(at: index),
+                progress: smoothStep(transition.progress)
+            )
+        } else if let transition, transition.targetIndex == index {
+            return interpolatedPreviewBaseSize(
+                from: inactivePreviewBaseSize(at: index),
+                to: activePreviewBaseSize,
+                progress: smoothStep(transition.progress)
+            )
+        } else if let pill, pillIndex == index {
+            let activeSize = shapeStyle.activeIndicatorSize(
+                sizeScale: sizeScale
+            )
+            let hoverScale = pillHoverScale(for: index, pill: pill)
+            return NSSize(
+                width: pill.width
+                    + activeSize.width * (hoverScale.width - 1),
+                height: pill.height
+                    + activeSize.height * (hoverScale.height - 1)
+            )
+        } else {
+            let hoverScale = hoverScales[index]
+                ?? CGSize(width: 1, height: 1)
+            return NSSize(
+                width: dotDiameter * hoverScale.width,
+                height: dotDiameter * hoverScale.height
+            )
+        }
+    }
+
+    private var activePreviewBaseSize: NSSize {
+        shapeStyle.activeIndicatorSize(sizeScale: sizeScale)
+    }
+
+    private func inactivePreviewBaseSize(at index: Int) -> NSSize {
+        let hoverScale = hoverScales[index]
+            ?? CGSize(width: 1, height: 1)
+        return NSSize(
+            width: dotDiameter * hoverScale.width,
+            height: dotDiameter * hoverScale.height
+        )
+    }
+
+    private func interpolatedPreviewBaseSize(
+        from source: NSSize,
+        to target: NSSize,
+        progress: CGFloat
+    ) -> NSSize {
+        NSSize(
+            width: source.width
+                + (target.width - source.width) * progress,
+            height: source.height
+                + (target.height - source.height) * progress
+        )
+    }
+
+    private func layoutCenterX(for index: Int, extraWidth: CGFloat) -> CGFloat {
+        layoutX(
+            forBaseContentX: edgeItemWidth / 2 + CGFloat(index) * itemWidth,
+            extraWidth: extraWidth
+        )
+    }
+
+    private func applicationPreviewHitRange(
+        for geometry: ApplicationPreviewGeometry
+    ) -> ClosedRange<CGFloat> {
+        // The status item grows towards the leading edge. In image
+        // coordinates, the indicator's original hit cell therefore shifts by
+        // half the animated width even though the visual center stays stable.
+        let shiftedCellCenter = geometry.rect.midX
+            + geometry.extraWidth / 2
+        let originalCell = NSRect(
+            x: shiftedCellCenter - itemWidth / 2,
+            y: 0,
+            width: itemWidth,
+            height: imageSize.height
+        )
+        let lowerBound = min(geometry.rect.minX, originalCell.minX)
+        let upperBound = max(geometry.rect.maxX, originalCell.maxX)
+        return lowerBound...upperBound
+    }
+
+    private func layoutX(
+        forBaseContentX baseX: CGFloat,
+        extraWidth: CGFloat
+    ) -> CGFloat {
+        let centeringInset = horizontalOverflowPadding
+            + (applicationPreviewMaximumExtraWidth - extraWidth) / 2
+        guard let previewIndex = applicationPreviewIndex else {
+            return centeringInset + baseX
+        }
+        let previewBaseX = edgeItemWidth / 2
+            + CGFloat(previewIndex) * itemWidth
+        return centeringInset
+            + baseX
+            + Self.applicationPreviewLayoutShift(
+                baseX: baseX,
+                previewBaseX: previewBaseX,
+                itemWidth: itemWidth,
+                extraWidth: extraWidth
+            )
+    }
+
+    /// Content on either side of an expanded preview still receives the full
+    /// 0 / `extraWidth` displacement. A moving pill, however, can cross the
+    /// preview cell between display-link frames, so its displacement must be
+    /// continuous rather than switching discretely at the cell centre.
+    static func applicationPreviewLayoutShift(
+        baseX: CGFloat,
+        previewBaseX: CGFloat,
+        itemWidth: CGFloat,
+        extraWidth: CGFloat
+    ) -> CGFloat {
+        guard itemWidth > 0, extraWidth > 0 else { return 0 }
+        let progress = min(
+            max(
+                0.5 + (baseX - previewBaseX) / itemWidth,
+                0
+            ),
+            1
+        )
+        return extraWidth * progress
+    }
+
+    private func fittedContentScale(extraWidth: CGFloat) -> CGFloat {
+        guard let maximumVisibleContentWidth else { return 1 }
+        let outerPadding = max(
+            baseStatusItemWidth - baseContentWidth,
+            0
+        )
+        let availableContentWidth = max(
+            maximumVisibleContentWidth - outerPadding,
+            0.01
+        )
+        return min(
+            availableContentWidth
+                / max(baseContentWidth + extraWidth, 0.01),
+            1
+        )
+    }
+
+    private func renderedImageX(
+        fromUnscaledLayoutX x: CGFloat
+    ) -> CGFloat {
+        let centerX = imageSize.width / 2
+        return centerX + (x - centerX) * currentContentScale
+    }
+
+    private func unscaledLayoutX(
+        fromRenderedImageX x: CGFloat
+    ) -> CGFloat {
+        let centerX = imageSize.width / 2
+        return centerX
+            + (x - centerX) / max(currentContentScale, 0.01)
+    }
+
+    private func drawApplicationPreview(
+        geometry: ApplicationPreviewGeometry,
+        index: Int,
+        isActive: Bool,
+        followsPill: Bool,
+        pillIndex: Int?,
+        pill: StatusPillFrame?,
+        transition: (
+            sourceIndex: Int,
+            targetIndex: Int,
+            progress: CGFloat
+        )?,
+        resolvedInterruptedPresentation:
+            StatusInterruptedTransitionPresentation?
+    ) {
+        // `StatusApplicationPreviewMotion` has already eased this value.
+        // Re-easing it here made color lag behind geometry and icons around
+        // both endpoints, which read as a short pause during hover.
+        let appearanceProgress = min(
+            max(applicationPreviewFrame.expansion, 0),
+            1
+        )
+        if followsPill, let pill {
+            if let resolvedInterruptedPresentation {
+                drawResolvedPillAppearance(
+                    in: geometry.rect,
+                    appearance: resolvedInterruptedPresentation.pill,
+                    waist: pill.waist
+                )
+            } else if let transition {
+                drawTransitioningPill(
+                    in: geometry.rect,
+                    sourceIndex: transition.sourceIndex,
+                    targetIndex: transition.targetIndex,
+                    progress: transition.progress,
+                    waist: pill.waist
+                )
+            } else if
+                let pillIndex,
+                indicatorKinds.indices.contains(pillIndex)
+            {
+                drawActiveIndicator(
+                    in: geometry.rect,
+                    kind: indicatorKinds[pillIndex],
+                    color: indicatorColors[pillIndex],
+                    waist: pill.waist
+                )
+            }
+        } else {
+            drawApplicationPreviewIndicator(
+                in: geometry.rect,
+                index: index,
+                isActive: isActive,
+                appearanceProgress: appearanceProgress
+            )
+        }
+
+        let progress = min(
+            max(applicationPreviewFrame.expansion, 0),
+            1
+        )
+        let fullIconsWidth =
+            CGFloat(applicationIcons.count) * applicationIconSize
+            + CGFloat(max(applicationIcons.count - 1, 0))
+                * applicationIconSpacing
+        let horizontalInset =
+            StatusApplicationPreviewLayout.horizontalInset
+            * applicationPreviewScale * progress
+        let verticalInset =
+            StatusApplicationPreviewLayout.verticalInset
+            * applicationPreviewScale * progress
+        let availableWidth = max(
+            geometry.rect.width - horizontalInset * 2,
+            0
+        )
+        let availableHeight = max(
+            geometry.rect.height - verticalInset * 2,
+            0
+        )
+        let iconScale = min(
+            min(
+                availableWidth / max(fullIconsWidth, 0.001),
+                availableHeight / max(applicationIconSize, 0.001)
+            ),
+            1
+        )
+        let iconSize = applicationIconSize * iconScale
+        let iconSpacing = applicationIconSpacing * iconScale
+        let totalWidth = CGFloat(applicationIcons.count) * iconSize
+            + CGFloat(max(applicationIcons.count - 1, 0))
+                * iconSpacing
+        let baseOpacity = min(
+            max(applicationPreviewFrame.iconOpacity, 0),
+            1
+        )
+        // Icons shrink into the same shape while fading slightly faster than
+        // its background. This prevents a bright afterimage outside a pill
+        // that has already become narrower than the icon group.
+        let opacity = baseOpacity * baseOpacity
+            * min(iconScale * 1.4, 1)
+        guard
+            opacity > 0.001,
+            iconSize > 0.001,
+            !applicationIcons.isEmpty
+        else { return }
+
+        var x = geometry.rect.midX - totalWidth / 2
+        let y = geometry.rect.midY - iconSize / 2
+        for icon in applicationIcons {
+            icon.draw(
+                in: NSRect(
+                    x: x,
+                    y: y,
+                    width: iconSize,
+                    height: iconSize
+                ),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: opacity,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            x += iconSize + iconSpacing
+        }
+    }
+
+    private func drawApplicationPreviewIndicator(
+        in rect: NSRect,
+        index: Int,
+        isActive: Bool,
+        appearanceProgress: CGFloat
+    ) {
+        let color = indicatorColors[index]
+        let progress = min(max(appearanceProgress, 0), 1)
+        if indicatorKinds[index].isFullscreen {
+            let inactiveLineWidth = fullscreenOutlineWidth
+                * (increasedContrast ? 1.12 : 1)
+            let activeLineWidth = fullscreenOutlineWidth
+                * (increasedContrast ? 1.68 : 1.5)
+            let initialOpacity = isActive
+                ? 1
+                : inactiveFullscreenOpacity
+            let initialLineWidth = isActive
+                ? activeLineWidth
+                : inactiveLineWidth
+            drawHollowIndicator(
+                in: rect,
+                color: color,
+                strokeOpacity: initialOpacity
+                    + (1 - initialOpacity) * progress,
+                edgeOpacity: indicatorEdgeOpacity,
+                lineWidth: initialLineWidth
+                    + (activeLineWidth - initialLineWidth) * progress,
+                isFullscreen: true
+            )
+            return
+        }
+
+        let initialOpacity = isActive ? 1 : inactiveDesktopOpacity
+        drawFilledIndicator(
+            in: rect,
+            color: color,
+            fillOpacity: initialOpacity
+                + (1 - initialOpacity) * progress,
+            edgeOpacity: indicatorEdgeOpacity
+        )
     }
 
     private func drawInactiveIndicator(
@@ -264,16 +1119,17 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 strokeOpacity: inactiveFullscreenOpacity * opacity,
-                thinOutlineOpacity: thinOutlineOpacity * opacity,
+                edgeOpacity: indicatorEdgeOpacity * opacity,
                 lineWidth: fullscreenOutlineWidth
-                    * (increasedContrast ? 1.12 : 1)
+                    * (increasedContrast ? 1.12 : 1),
+                isFullscreen: true
             )
         } else {
             drawFilledIndicator(
                 in: rect,
                 color: color,
                 fillOpacity: inactiveDesktopOpacity * opacity,
-                outlineOpacity: thinOutlineOpacity * opacity
+                edgeOpacity: indicatorEdgeOpacity * opacity
             )
         }
     }
@@ -285,8 +1141,34 @@ nonisolated final class StatusIndicatorImageRenderer {
         progress: CGFloat,
         waist: CGFloat
     ) {
+        drawResolvedPillAppearance(
+            in: rect,
+            appearance: resolvedTransitioningPillAppearance(
+                sourceIndex: sourceIndex,
+                targetIndex: targetIndex,
+                progress: progress
+            ),
+            waist: waist
+        )
+    }
+
+    private func restingPillAppearance(
+        at index: Int
+    ) -> StatusResolvedPillAppearance {
+        StatusResolvedPillAppearance(
+            color: indicatorColors[index],
+            desktopOpacity: indicatorKinds[index].isFullscreen ? 0 : 1,
+            fullscreenOpacity: indicatorKinds[index].isFullscreen ? 1 : 0
+        )
+    }
+
+    private func resolvedTransitioningPillAppearance(
+        sourceIndex: Int,
+        targetIndex: Int,
+        progress: CGFloat
+    ) -> StatusResolvedPillAppearance {
         let visualProgress = smoothStep(
-            remap(progress, from: 0.22, to: 0.82)
+            remap(progress, from: 0.20, to: 0.80)
         )
         let sourceKind = indicatorKinds[sourceIndex]
         let targetKind = indicatorKinds[targetIndex]
@@ -297,31 +1179,53 @@ nonisolated final class StatusIndicatorImageRenderer {
         )
 
         if sourceKind.isFullscreen == targetKind.isFullscreen {
-            drawActiveIndicator(
-                in: rect,
-                kind: targetKind,
+            return StatusResolvedPillAppearance(
                 color: color,
-                waist: waist
+                desktopOpacity: targetKind.isFullscreen ? 0 : 1,
+                fullscreenOpacity: targetKind.isFullscreen ? 1 : 0
             )
-            return
         }
 
+        let sourceDesktopOpacity = sourceKind.isFullscreen
+            ? 0
+            : 1 - visualProgress
+        let targetDesktopOpacity = targetKind.isFullscreen
+            ? 0
+            : visualProgress
+        let sourceFullscreenOpacity = sourceKind.isFullscreen
+            ? 1 - visualProgress
+            : 0
+        let targetFullscreenOpacity = targetKind.isFullscreen
+            ? visualProgress
+            : 0
+        return StatusResolvedPillAppearance(
+            color: color,
+            desktopOpacity:
+                sourceDesktopOpacity + targetDesktopOpacity,
+            fullscreenOpacity:
+                sourceFullscreenOpacity + targetFullscreenOpacity
+        )
+    }
+
+    private func drawResolvedPillAppearance(
+        in rect: NSRect,
+        appearance: StatusResolvedPillAppearance,
+        waist: CGFloat
+    ) {
         // A desktop fill and a full-screen inner outline dissolve through one
-        // another while sharing the exact same liquid silhouette. This avoids
-        // the one-frame visual switch that previously made mixed transitions
-        // feel like a stutter.
+        // another while sharing the exact same liquid silhouette.
         drawActiveIndicator(
             in: rect,
-            kind: sourceKind,
-            color: color,
-            opacity: 1 - visualProgress,
+            kind: .desktop(colorIndex: 0),
+            color: appearance.color,
+            opacity: appearance.desktopOpacity,
             waist: waist
         )
         drawActiveIndicator(
             in: rect,
-            kind: targetKind,
-            color: color,
-            opacity: visualProgress,
+            kind: .fullscreen(colorIndex: 0),
+            color: appearance.color,
+            opacity: appearance.fullscreenOpacity,
             waist: waist
         )
     }
@@ -339,17 +1243,18 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 strokeOpacity: opacity,
-                thinOutlineOpacity: thinOutlineOpacity * opacity,
+                edgeOpacity: indicatorEdgeOpacity * opacity,
                 lineWidth: fullscreenOutlineWidth
                     * (increasedContrast ? 1.68 : 1.5),
-                waist: waist
+                waist: waist,
+                isFullscreen: true
             )
         } else {
             drawFilledIndicator(
                 in: rect,
                 color: color,
                 fillOpacity: opacity,
-                outlineOpacity: thinOutlineOpacity * opacity,
+                edgeOpacity: indicatorEdgeOpacity * opacity,
                 waist: waist
             )
         }
@@ -359,58 +1264,51 @@ nonisolated final class StatusIndicatorImageRenderer {
         in rect: NSRect,
         color: NSColor,
         strokeOpacity: CGFloat,
-        thinOutlineOpacity: CGFloat,
+        edgeOpacity: CGFloat,
         lineWidth: CGFloat,
-        waist: CGFloat = 0
+        waist: CGFloat = 0,
+        isFullscreen: Bool = false
     ) {
-        if showsThinOutline {
-            let outlineWidth = thinOutlineWidth
-            drawOutline(
-                in: rect,
-                color: thinOutlineColor(
-                    for: color,
-                    opacity: thinOutlineOpacity
-                ),
-                lineWidth: lineWidth + outlineWidth * 2,
-                waist: waist
-            )
-            drawOutline(
-                in: rect.insetBy(
-                    dx: outlineWidth,
-                    dy: outlineWidth
-                ),
-                color: color.withAlphaComponent(strokeOpacity),
-                lineWidth: lineWidth,
-                waist: waist
-            )
-            return
-        }
         drawOutline(
             in: rect,
             color: color.withAlphaComponent(strokeOpacity),
             lineWidth: lineWidth,
             waist: waist
+                ,isFullscreen: isFullscreen
         )
+        if showsDarkEdge && edgeOpacity > 0.001 {
+            let outlineColor = thinOutlineColor(
+                for: color,
+                opacity: edgeOpacity
+            )
+            drawOutline(
+                in: rect,
+                color: outlineColor,
+                lineWidth: indicatorEdgeWidth,
+                waist: waist,
+                isFullscreen: isFullscreen
+            )
+        }
     }
 
     private func drawFilledIndicator(
         in rect: NSRect,
         color: NSColor,
         fillOpacity: CGFloat,
-        outlineOpacity: CGFloat,
+        edgeOpacity: CGFloat,
         waist: CGFloat = 0
     ) {
         color.withAlphaComponent(fillOpacity).setFill()
         indicatorPath(in: rect, waist: waist).fill()
 
-        guard showsThinOutline else { return }
+        guard showsDarkEdge else { return }
         drawOutline(
             in: rect,
             color: thinOutlineColor(
                 for: color,
-                opacity: outlineOpacity
+                opacity: edgeOpacity
             ),
-            lineWidth: thinOutlineWidth,
+            lineWidth: indicatorEdgeWidth,
             waist: waist
         )
     }
@@ -476,7 +1374,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         }
         if index == transition.targetIndex {
             let absorption = smoothStep(
-                remap(transition.progress, from: 0.54, to: 0.84)
+                remap(transition.progress, from: 0.56, to: 0.82)
             )
             return (1 - absorption, 1 - 0.42 * absorption)
         }
@@ -501,6 +1399,14 @@ nonisolated final class StatusIndicatorImageRenderer {
         )
     }
 
+    private func interpolate(
+        _ source: CGFloat,
+        _ target: CGFloat,
+        _ progress: CGFloat
+    ) -> CGFloat {
+        source + (target - source) * progress
+    }
+
     private func remap(
         _ value: CGFloat,
         from start: CGFloat,
@@ -518,9 +1424,12 @@ nonisolated final class StatusIndicatorImageRenderer {
         in rect: NSRect,
         color: NSColor,
         lineWidth: CGFloat,
-        waist: CGFloat = 0
+        waist: CGFloat = 0,
+        isFullscreen: Bool = false
     ) {
-        let inset = lineWidth / 2
+        let inset = isFullscreen
+            ? lineWidth
+            : lineWidth / 2
         let innerRect = rect.insetBy(dx: inset, dy: inset)
         guard innerRect.width > 0, innerRect.height > 0 else { return }
         let path = indicatorPath(in: innerRect, waist: waist)
@@ -695,7 +1604,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         increasedContrast ? 0.72 : 0.46
     }
 
-    private var thinOutlineOpacity: CGFloat {
+    private var indicatorEdgeOpacity: CGFloat {
         increasedContrast ? 0.48 : 0.25
     }
 
@@ -703,7 +1612,7 @@ nonisolated final class StatusIndicatorImageRenderer {
         max(1.1 * sizeScale, 1)
     }
 
-    private var thinOutlineWidth: CGFloat {
+    private var indicatorEdgeWidth: CGFloat {
         max(0.35 * sizeScale, 0.35)
     }
 }

@@ -47,8 +47,8 @@ private final class StatusHoverTrackingView: NSView {
 
     override var isOpaque: Bool { false }
 
-    /// The status-bar button remains the click target; this view only owns
-    /// its independent tracking area.
+    /// The status-bar button remains the click target; this view owns only
+    /// the independent tracking area.
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
@@ -82,14 +82,23 @@ private final class StatusHoverTrackingView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        // The status item's width and preview geometry can change during hover
+        // and trigger transient exit events while the pointer is still over the
+        // menu icon. Re-check the real pointer position to avoid flicker.
         eventHandler(nil)
     }
 }
 
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
+    private struct PendingArtworkStructure {
+        let count: Int
+        let indicatorKinds: [SpaceIndicatorKind]
+    }
+
     private let viewModel: SpaceViewModel
     private let settings: AppSettings
+    private let spaceApplicationReader: any SpaceApplicationReading
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var cancellables = Set<AnyCancellable>()
     private var renderedSpaceCount = 0
@@ -97,16 +106,31 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var renderedActiveIndex: Int?
     private var renderedPillFrame: StatusPillFrame?
     private var artworkRenderer: StatusIndicatorImageRenderer?
+    private var statusItemLength: CGFloat?
     private var displayLink: CADisplayLink?
     private var pillMotion: StatusPillMotion?
     private var transitionSourceIndex: Int?
+    private var interruptedTransitionPresentation:
+        StatusInterruptedTransitionPresentation?
     private var hoverTrackingView: StatusHoverTrackingView?
+    private var globalMouseMonitor: Any?
+    private var globalSpaceGestureMonitor: Any?
     private var hoveredIndex: Int?
     private var hoverScales: [Int: CGSize] = [:]
     private var hoverMotions: [Int: StatusHoverMotion] = [:]
+    private var applicationPreviewTask: Task<Void, Never>?
+    private var applicationPreviewIndex: Int?
+    private var applicationPreviewApplications: [
+        SpaceApplicationPresentation
+    ] = []
+    private var applicationPreviewFrame =
+        StatusApplicationPreviewFrame.hidden
+    private var applicationPreviewMotion: StatusApplicationPreviewMotion?
+    private var applicationPreviewTracksPill = false
     private var artworkPresentation: StatusArtworkPresentation = .identity
     private var artworkRefreshMotion: StatusArtworkRefreshMotion?
     private var artworkRefreshDidApplySettings = false
+    private var pendingArtworkStructure: PendingArtworkStructure?
     private var presentedSizeScale: CGFloat
     private var presentedSpacingScale: CGFloat
     private var presentedAnimationsEnabled: Bool
@@ -116,9 +140,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var settingsWindowController: SettingsWindowController?
     private var isStopped = false
 
-    init(viewModel: SpaceViewModel, settings: AppSettings) {
+    init(
+        viewModel: SpaceViewModel,
+        settings: AppSettings,
+        spaceApplicationReader: any SpaceApplicationReading =
+            SystemSpaceApplicationReader()
+    ) {
         self.viewModel = viewModel
         self.settings = settings
+        self.spaceApplicationReader = spaceApplicationReader
         presentedSizeScale = CGFloat(settings.indicatorSizeScale)
         presentedSpacingScale = CGFloat(settings.indicatorSpacingScale)
         presentedAnimationsEnabled = settings.animateIndicator
@@ -127,6 +157,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         super.init()
         configureStatusItem()
         observeChanges()
+        startGlobalSpaceGestureMonitoring()
     }
 
     func stop() {
@@ -143,9 +174,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         displayLink?.invalidate()
         displayLink = nil
         pillMotion = nil
+        transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         hoverMotions.removeAll()
         artworkRefreshMotion = nil
+        applicationPreviewTask?.cancel()
+        applicationPreviewTask = nil
+        applicationPreviewMotion = nil
+        applicationPreviewTracksPill = false
+        applicationPreviewApplications.removeAll()
+        applicationPreviewIndex = nil
 
+        stopGlobalMouseMonitoring()
+        stopGlobalSpaceGestureMonitoring()
         hoverTrackingView?.removeFromSuperview()
         hoverTrackingView = nil
         statusItem.button?.target = nil
@@ -157,8 +198,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         button.title = ""
         button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.focusRingType = .none
         button.imageScaling = .scaleNone
         button.contentTintColor = nil
+        button.wantsLayer = true
+        button.layer?.masksToBounds = true
+        button.layer?.shadowOpacity = 0
+        button.layer?.shadowRadius = 0
+        button.layer?.shadowColor = nil
+        button.layer?.borderWidth = 0
+        button.layer?.borderColor = nil
+        button.layer?.backgroundColor = NSColor.clear.cgColor
         button.target = self
         button.action = #selector(statusItemClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseDown])
@@ -209,9 +260,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 guard let self else { return }
                 switch change {
                 case .colors:
-                    refreshArtworkForSettings()
+                    refreshIndicatorColors()
                 case .outline:
-                    refreshArtworkForSettings()
+                    refreshIndicatorEdge()
                 case .layout:
                     applyPendingVisualSettings()
                 case .animationEnabled(let enabled):
@@ -224,6 +275,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                     beginArtworkRefresh()
                 case .shapeStyle:
                     beginArtworkRefresh()
+                case .applicationsOnHover(let enabled):
+                    if enabled, let hoveredIndex {
+                        startHoverMotion(
+                            at: hoveredIndex,
+                            isHovered: false
+                        )
+                        scheduleApplicationPreview(for: hoveredIndex)
+                    } else {
+                        dismissApplicationPreview()
+                        if let hoveredIndex {
+                            startHoverMotion(
+                                at: hoveredIndex,
+                                isHovered: true
+                            )
+                        }
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -245,6 +312,24 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 self?.refreshArtworkForSettings()
             }
             .store(in: &cancellables)
+    }
+
+    private func refreshIndicatorColors() {
+        guard let artworkRenderer else { return }
+        artworkRenderer.setIndicatorColors(
+            settings.indicatorColors(
+                for: renderedDesktopColorSlotCount
+            )
+        )
+        renderArtwork()
+    }
+
+    private func refreshIndicatorEdge() {
+        guard let artworkRenderer else { return }
+        artworkRenderer.setShowsDarkEdge(
+            settings.showsIndicatorOutline
+        )
+        renderArtwork()
     }
 
     private func configureDisplayLink(for button: NSStatusBarButton) {
@@ -279,7 +364,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             if let event {
                 self.updateHover(with: event, in: button)
             } else {
-                self.setHoveredIndex(nil)
+                // AppKit can emit a transient exit while an NSStatusItem is
+                // changing width. Re-read the actual pointer position after
+                // that layout pass instead of collapsing a preview that is
+                // still under the cursor.
+                DispatchQueue.main.async { [weak self, weak button] in
+                    guard let self, let button else { return }
+                    self.synchronizeHoverLocation(for: button)
+                }
             }
         }
         trackingView.frame = button.bounds
@@ -297,24 +389,53 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     ) {
         let count = max(count, 1)
         guard indicatorKinds.count == count else { return }
+        let structureChanged = count != renderedSpaceCount
+            || indicatorKinds != renderedIndicatorKinds
         guard
             force
-                || count != renderedSpaceCount
-                || indicatorKinds != renderedIndicatorKinds
+                || structureChanged
         else { return }
+        if structureChanged,
+           !force,
+           renderedSpaceCount > 0,
+           OrbitMotion.allowsMotion(
+                userEnabled: presentedAnimationsEnabled,
+                reduceMotion: NSWorkspace.shared
+                    .accessibilityDisplayShouldReduceMotion
+           ) {
+            pendingArtworkStructure = PendingArtworkStructure(
+                count: count,
+                indicatorKinds: indicatorKinds
+            )
+            if artworkRefreshMotion == nil {
+                beginStructureRefresh()
+            }
+            return
+        }
+        if structureChanged {
+            applicationPreviewTask?.cancel()
+            applicationPreviewTask = nil
+            applicationPreviewIndex = nil
+            applicationPreviewApplications.removeAll()
+            applicationPreviewFrame = .hidden
+            applicationPreviewMotion = nil
+            applicationPreviewTracksPill = false
+        }
         renderedSpaceCount = count
         renderedIndicatorKinds = indicatorKinds
+        // A renderer rebuild establishes a new coordinate system. A motion
+        // created by the previous renderer must never resume on its next
+        // display-link tick, because its positions and shape metrics no longer
+        // describe the pixels now on screen.
+        pillMotion = nil
+        transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         if let hoveredIndex, !(0..<count).contains(hoveredIndex) {
             self.hoveredIndex = nil
         }
         hoverScales = hoverScales.filter { (0..<count).contains($0.key) }
         hoverMotions = hoverMotions.filter { (0..<count).contains($0.key) }
 
-        statusItem.length = StatusItemArtwork.preferredWidth(
-            for: count,
-            sizeScale: indicatorSizeScale,
-            spacingScale: indicatorSpacingScale
-        )
         guard let button = statusItem.button else { return }
 
         let renderer = StatusIndicatorImageRenderer(
@@ -323,7 +444,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             indicatorColors: settings.indicatorColors(
                 for: renderedDesktopColorSlotCount
             ),
-            showsThinOutline: settings.showsIndicatorOutline,
+            showsDarkEdge: settings.showsIndicatorOutline,
             shapeStyle: presentedShapeStyle,
             sizeScale: indicatorSizeScale,
             spacingScale: indicatorSpacingScale,
@@ -331,18 +452,29 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 sizeScale: indicatorSizeScale
             ),
             increasedContrast: NSWorkspace.shared
-                .accessibilityDisplayShouldIncreaseContrast
+                .accessibilityDisplayShouldIncreaseContrast,
+            applicationPreviewIndex: applicationPreviewIndex,
+            applicationIcons: applicationPreviewApplications.map(\.icon),
+            maximumApplicationPreviewIconCount:
+                StatusApplicationPreviewLayout.maximumIconCount,
+            maximumVisibleContentWidth:
+                StatusItemArtwork.maximumStatusItemWidth
         )
         artworkRenderer = renderer
 
-        // This exact NSImage instance remains installed until the number of
-        // Spaces changes. Animation only redraws its bitmap pixels; it
-        // never replaces the button image or modifies the view hierarchy.
+        statusItem.length = StatusItemArtwork.preferredWidth(
+            for: count,
+            sizeScale: indicatorSizeScale,
+            spacingScale: indicatorSpacingScale
+        )
+        statusItemLength = statusItem.length
+
         button.image = renderer.image
         button.contentTintColor = nil
 
         if let index = viewModel.activeIndex, (0..<count).contains(index) {
             transitionSourceIndex = nil
+            interruptedTransitionPresentation = nil
             renderedActiveIndex = index
             renderPill(
                 .resting(
@@ -353,20 +485,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             )
         } else {
             transitionSourceIndex = nil
+            interruptedTransitionPresentation = nil
             renderedActiveIndex = nil
             renderedPillFrame = nil
-            renderer.update(
-                pill: nil,
-                activeIndex: nil,
-                hoverScales: hoverScales
-            )
-            button.needsDisplay = true
+            renderArtwork()
         }
 
         if hoverTrackingView != nil {
             configureHoverTracking(for: button)
         }
         updateAccessibilityValue(renderedActiveIndex)
+        updateDisplayLinkState()
     }
 
     private func updateActivePill(to index: Int?, animated: Bool) {
@@ -375,6 +504,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             (0..<renderedSpaceCount).contains(index)
         else {
             let previousIndex = renderedActiveIndex
+            dismissApplicationPreview(
+                animated: false,
+                renderImmediately: false
+            )
             stopPillMotion()
             renderedActiveIndex = nil
             renderedPillFrame = nil
@@ -387,10 +520,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         let previousIndex = renderedActiveIndex
         let targetX = indicatorCenterX(for: index)
-        renderedActiveIndex = index
-        if previousIndex != index {
-            retargetHoveredIndicator()
-        }
 
         guard
             animated,
@@ -402,6 +531,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                     .accessibilityDisplayShouldReduceMotion
             )
         else {
+            renderedActiveIndex = index
+            if previousIndex != index {
+                retargetHoveredIndicator()
+            }
+            if previousIndex != index {
+                dismissApplicationPreview(
+                    animated: false,
+                    renderImmediately: false
+                )
+            }
             stopPillMotion()
             renderPill(
                 .resting(
@@ -413,29 +552,77 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             return
         }
 
-        let sourceX = pillMotion == nil
+        let existingMotion = pillMotion
+        let now = CACurrentMediaTime()
+        let currentFrame = renderedPillFrame
+            ?? existingMotion?.frame(at: now)
+        let shouldRetargetFromCurrentFrame =
+            existingMotion != nil
+            && !(renderedPillFrame?.isComplete == true)
+        let isReversing = existingMotion.map { motion in
+            abs(motion.fromX - targetX) < 0.6
+        } ?? false
+        let sourceX = existingMotion == nil
             ? indicatorCenterX(for: previousIndex)
-            : renderedPillFrame?.x ?? indicatorCenterX(for: previousIndex)
+            : currentFrame?.x ?? indicatorCenterX(for: previousIndex)
         let activeSize = presentedShapeStyle.activeIndicatorSize(
             sizeScale: indicatorSizeScale
         )
-        let motion = StatusPillMotion(
-            fromX: sourceX,
-            toX: targetX,
-            initialWidth: renderedPillFrame?.width ?? activeSize.width,
-            initialHeight: renderedPillFrame?.height ?? activeSize.height,
-            startTime: CACurrentMediaTime(),
-            sizeScale: indicatorSizeScale,
-            itemWidth: renderedItemWidth,
-            style: presentedAnimationStyle,
-            shapeStyle: presentedShapeStyle
+
+        let interruptedPresentation: StatusInterruptedTransitionPresentation?
+        let motion: StatusPillMotion
+        
+        if shouldRetargetFromCurrentFrame, let currentFrame {
+            motion = .statusBarContinuation(
+                from: currentFrame,
+                toX: targetX,
+                startTime: now,
+                sizeScale: indicatorSizeScale,
+                itemWidth: renderedItemWidth,
+                shapeStyle: presentedShapeStyle,
+                style: presentedAnimationStyle
+            )
+            interruptedPresentation = nil
+        } else {
+            interruptedPresentation = existingMotion.flatMap { _ in
+                currentFrame.flatMap {
+                    artworkRenderer?.transitionPresentationSnapshot(for: $0)
+                }
+            }
+            motion = StatusPillMotion(
+                fromX: sourceX,
+                toX: targetX,
+                initialWidth: currentFrame?.width ?? activeSize.width,
+                initialHeight: currentFrame?.height ?? activeSize.height,
+                initialWaist: currentFrame?.waist ?? 0,
+                initialAppearanceProgress:
+                    interruptedPresentation == nil && isReversing
+                    ? 1 - (currentFrame?.progress ?? 0)
+                    : 0,
+                startTime: now,
+                sizeScale: indicatorSizeScale,
+                itemWidth: renderedItemWidth,
+                style: presentedAnimationStyle,
+                shapeStyle: presentedShapeStyle,
+                isRetargeting: existingMotion != nil
+            )
+        }
+        renderedActiveIndex = index
+        dismissApplicationPreviewForSpaceTransition(
+            sourceActiveIndex: previousIndex,
+            startTime: now,
+            fullDuration: motion.duration
         )
         transitionSourceIndex = presentedAnimationStyle
             .blendsIndicatorAppearanceDuringTransition
             ? previousIndex
             : nil
+        interruptedTransitionPresentation = interruptedPresentation
         pillMotion = motion
         renderPill(motion.frame(at: motion.startTime))
+        if previousIndex != index {
+            retargetHoveredIndicator()
+        }
         displayLink?.isPaused = false
     }
 
@@ -450,6 +637,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                !artworkRefreshDidApplySettings {
                 artworkRefreshDidApplySettings = true
                 applyPendingVisualSettings()
+                if let pendingArtworkStructure {
+                    self.pendingArtworkStructure = nil
+                    updateArtwork(
+                        for: pendingArtworkStructure.count,
+                        indicatorKinds:
+                            pendingArtworkStructure.indicatorKinds,
+                        force: true
+                    )
+                }
             }
             needsRender = true
             if frame.isComplete {
@@ -465,6 +661,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             if frame.isComplete {
                 self.pillMotion = nil
                 transitionSourceIndex = nil
+                interruptedTransitionPresentation = nil
             }
         }
 
@@ -477,6 +674,34 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 hoverMotions[index] = nil
                 if motion.targetScale == CGSize(width: 1, height: 1) {
                     hoverScales[index] = nil
+                }
+            }
+        }
+
+        if let applicationPreviewMotion {
+            let frame = applicationPreviewMotion.frame(at: timestamp)
+            applicationPreviewFrame = frame
+            needsRender = true
+            if frame.isComplete {
+                self.applicationPreviewMotion = nil
+                if applicationPreviewMotion.isPresenting {
+                    applicationPreviewFrame = .visible
+                } else {
+                    let shouldResumeForCurrentHover =
+                        applicationPreviewTask == nil
+                            && settings.showsApplicationsOnHover
+                            && hoveredIndex != nil
+                    applicationPreviewFrame = .hidden
+                    applicationPreviewTracksPill = false
+                    applicationPreviewIndex = nil
+                    applicationPreviewApplications.removeAll()
+                    artworkRenderer?.setApplicationPreview(
+                        index: nil,
+                        icons: []
+                    )
+                    if shouldResumeForCurrentHover {
+                        resumeApplicationPreviewForCurrentHover()
+                    }
                 }
             }
         }
@@ -497,15 +722,28 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             pill: renderedPillFrame,
             activeIndex: renderedActiveIndex,
             transitionSourceIndex: transitionSourceIndex,
+            interruptedTransitionPresentation:
+                interruptedTransitionPresentation,
             hoverScales: hoverScales,
-            presentation: artworkPresentation
+            presentation: artworkPresentation,
+            applicationPreviewFrame: applicationPreviewFrame,
+            applicationPreviewTracksPill:
+                applicationPreviewTracksPill
         )
+        if let artworkRenderer {
+            let desiredLength = artworkRenderer.currentStatusItemWidth
+            if abs(desiredLength - (statusItemLength ?? 0)) > 0.01 {
+                statusItem.length = desiredLength
+                statusItemLength = desiredLength
+            }
+        }
         statusItem.button?.needsDisplay = true
     }
 
     private func stopPillMotion() {
         pillMotion = nil
         transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         updateDisplayLinkState()
     }
 
@@ -513,6 +751,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         displayLink?.isPaused = pillMotion == nil
             && hoverMotions.isEmpty
             && artworkRefreshMotion == nil
+            && applicationPreviewMotion == nil
     }
 
     private func updateAccessibilityValue(_ index: Int?) {
@@ -536,6 +775,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         at point: NSPoint,
         in button: NSStatusBarButton
     ) -> Int? {
+        if let artworkRenderer {
+            let imageX = point.x
+                + (artworkRenderer.imageSize.width - button.bounds.width) / 2
+            return artworkRenderer.indicatorIndex(atImageX: imageX)
+        }
         let contentWidth = StatusItemArtwork.contentWidth(
             for: renderedSpaceCount,
             sizeScale: indicatorSizeScale,
@@ -564,8 +808,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func synchronizeHoverLocation(for button: NSStatusBarButton) {
         guard let window = button.window else { return }
+        let windowPoint = window.convertPoint(
+            fromScreen: NSEvent.mouseLocation
+        )
         let point = button.convert(
-            window.mouseLocationOutsideOfEventStream,
+            windowPoint,
             from: nil
         )
         setHoveredIndex(
@@ -583,12 +830,369 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let previousIndex = hoveredIndex
         hoveredIndex = normalizedIndex
 
+        if normalizedIndex != nil {
+            startGlobalMouseMonitoringIfNeeded()
+        } else {
+            stopGlobalMouseMonitoring()
+        }
+
         if let previousIndex {
             startHoverMotion(at: previousIndex, isHovered: false)
         }
         if let normalizedIndex {
-            startHoverMotion(at: normalizedIndex, isHovered: true)
+            if settings.showsApplicationsOnHover {
+                scheduleApplicationPreview(for: normalizedIndex)
+            } else {
+                startHoverMotion(at: normalizedIndex, isHovered: true)
+            }
+        } else {
+            dismissApplicationPreview()
         }
+    }
+
+    private func startGlobalMouseMonitoringIfNeeded() {
+        guard globalMouseMonitor == nil else { return }
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard
+                    let self,
+                    self.hoveredIndex != nil,
+                    let button = self.statusItem.button
+                else { return }
+                self.synchronizeHoverLocation(for: button)
+            }
+        }
+    }
+
+    private func stopGlobalMouseMonitoring() {
+        guard let globalMouseMonitor else { return }
+        NSEvent.removeMonitor(globalMouseMonitor)
+        self.globalMouseMonitor = nil
+    }
+
+    /// WindowServer freezes a bitmap of every status item while an
+    /// interactive Space gesture is in progress. Leaving the pill halfway
+    /// through a liquid morph at that instant makes the frozen bitmap look
+    /// like a stalled Orbit animation and produces a jump when macOS swaps in
+    /// the live menu bar again. Settle before the system captures that bitmap.
+    private func startGlobalSpaceGestureMonitoring() {
+        guard globalSpaceGestureMonitor == nil else { return }
+        globalSpaceGestureMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.gesture, .swipe, .scrollWheel]
+        ) { [weak self] event in
+            let isHorizontalSpaceGesture: Bool
+            if event.type == .scrollWheel {
+                isHorizontalSpaceGesture =
+                    abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+                    && abs(event.scrollingDeltaX) > 0.01
+            } else {
+                isHorizontalSpaceGesture = true
+            }
+            guard isHorizontalSpaceGesture else { return }
+            Task { @MainActor [weak self] in
+                self?.settlePillBeforeSystemSpaceSnapshot()
+            }
+        }
+    }
+
+    private func stopGlobalSpaceGestureMonitoring() {
+        guard let globalSpaceGestureMonitor else { return }
+        NSEvent.removeMonitor(globalSpaceGestureMonitor)
+        self.globalSpaceGestureMonitor = nil
+    }
+
+    private func settlePillBeforeSystemSpaceSnapshot() {
+        guard
+            pillMotion != nil,
+            let renderedActiveIndex,
+            (0..<renderedSpaceCount).contains(renderedActiveIndex)
+        else { return }
+
+        pillMotion = nil
+        transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
+        renderedPillFrame = .resting(
+            at: indicatorCenterX(for: renderedActiveIndex),
+            sizeScale: indicatorSizeScale,
+            shapeStyle: presentedShapeStyle
+        )
+        renderArtwork()
+        updateDisplayLinkState()
+    }
+
+    private func scheduleApplicationPreview(for index: Int) {
+        applicationPreviewTask?.cancel()
+        applicationPreviewTask = nil
+
+        guard
+            settings.showsApplicationsOnHover,
+            !applicationPreviewTracksPill,
+            viewModel.indicators.indices.contains(index),
+            renderedIndicatorKinds.indices.contains(index)
+        else { return }
+
+        // If the pointer returns while this same preview is closing, reverse
+        // the in-flight motion from its current frame. The fresh lookup still
+        // runs below, so continuity never comes at the cost of stale data.
+        let continuesCurrentPreview = applicationPreviewIndex == index
+            && !applicationPreviewApplications.isEmpty
+            && applicationPreviewFrame.expansion > 0.001
+        if continuesCurrentPreview {
+            presentApplicationPreview(
+                applications: applicationPreviewApplications,
+                at: index
+            )
+        }
+
+        let previousPreviewIndex = applicationPreviewIndex
+        if previousPreviewIndex != nil,
+           previousPreviewIndex != index {
+            dismissApplicationPreview()
+        }
+        let now = CACurrentMediaTime()
+        var presentationNotBefore = continuesCurrentPreview
+            ? now
+            : now + OrbitMotion.applicationPreviewHoverDelay
+        if let applicationPreviewMotion,
+           !applicationPreviewMotion.isPresenting {
+            presentationNotBefore = max(
+                presentationNotBefore,
+                applicationPreviewMotion.startTime
+                    + applicationPreviewMotion.duration
+            )
+        }
+        let spaceIdentifier = viewModel.indicators[index].id
+        let indicatorKind = renderedIndicatorKinds[index]
+        let reader = spaceApplicationReader
+
+        applicationPreviewTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let initialDelay = presentationNotBefore
+                - CACurrentMediaTime()
+            if initialDelay > 0 {
+                try? await Task.sleep(
+                    for: .seconds(initialDelay)
+                )
+            }
+
+            while !Task.isCancelled {
+                guard
+                    self.settings.showsApplicationsOnHover,
+                    self.hoveredIndex == index,
+                    self.viewModel.indicators.indices.contains(index),
+                    self.viewModel.indicators[index].id == spaceIdentifier
+                else { return }
+
+                // Read after the hover dwell rather than before it. A window
+                // moved between Spaces immediately before hover is therefore
+                // reflected by the snapshot that is actually presented.
+                let processIdentifiers =
+                    await reader.applicationProcessIdentifiers(
+                        in: spaceIdentifier
+                    )
+                guard
+                    !Task.isCancelled,
+                    self.settings.showsApplicationsOnHover,
+                    self.hoveredIndex == index
+                else { return }
+
+                let presentations =
+                    SpaceApplicationPresentationFactory.presentations(
+                        for: processIdentifiers,
+                        maximumCount: indicatorKind.isFullscreen
+                            ? 1
+                            : StatusApplicationPreviewLayout.maximumIconCount
+                    )
+                guard !presentations.isEmpty else {
+                    self.dismissApplicationPreview(animated: false)
+                    self.startHoverMotion(at: index, isHovered: true)
+                    return
+                }
+                self.presentApplicationPreview(
+                    applications: presentations,
+                    at: index
+                )
+
+                try? await Task.sleep(
+                    for: .seconds(
+                        OrbitMotion.applicationPreviewRefreshInterval
+                    )
+                )
+            }
+        }
+    }
+
+    private func resumeApplicationPreviewForCurrentHover() {
+        guard
+            pillMotion == nil,
+            applicationPreviewTask == nil,
+            let hoveredIndex,
+            (0..<renderedSpaceCount).contains(hoveredIndex)
+        else { return }
+        scheduleApplicationPreview(for: hoveredIndex)
+    }
+
+    private func presentApplicationPreview(
+        applications: [SpaceApplicationPresentation],
+        at index: Int
+    ) {
+        guard
+            settings.showsApplicationsOnHover,
+            hoveredIndex == index,
+            !applications.isEmpty
+        else { return }
+
+        let isCurrentPreview = applicationPreviewIndex == index
+            && !applicationPreviewApplications.isEmpty
+        let contentChanged = !isCurrentPreview
+            || applications.map(\.visualIdentity)
+                != applicationPreviewApplications.map(\.visualIdentity)
+
+        if applicationPreviewIndex == index,
+           applicationPreviewFrame == .visible,
+           applicationPreviewMotion == nil {
+            guard contentChanged else { return }
+            applicationPreviewApplications = applications
+            artworkRenderer?.setApplicationPreview(
+                index: index,
+                icons: applications.map(\.icon)
+            )
+            renderArtwork()
+            return
+        }
+
+        let initialFrame =
+            isCurrentPreview
+                || (applicationPreviewIndex != nil
+                    && applicationPreviewFrame.expansion > 0.001)
+            ? applicationPreviewFrame
+            : .hidden
+
+        applicationPreviewIndex = index
+        applicationPreviewApplications = applications
+        applicationPreviewFrame = initialFrame
+        applicationPreviewMotion = nil
+        applicationPreviewTracksPill = false
+        artworkRenderer?.setApplicationPreview(
+            index: index,
+            icons: applications.map(\.icon)
+        )
+
+        guard OrbitMotion.allowsMotion(
+            userEnabled: presentedAnimationsEnabled,
+            reduceMotion: NSWorkspace.shared
+                .accessibilityDisplayShouldReduceMotion
+        ) else {
+            applicationPreviewFrame = .visible
+            renderArtwork()
+            return
+        }
+
+        applicationPreviewMotion = StatusApplicationPreviewMotion(
+            isPresenting: true,
+            fromFrame: initialFrame,
+            startTime: CACurrentMediaTime()
+        )
+        renderArtwork()
+        updateDisplayLinkState()
+    }
+
+    private func dismissApplicationPreview(
+        animated: Bool = true,
+        renderImmediately: Bool = true
+    ) {
+        applicationPreviewTask?.cancel()
+        applicationPreviewTask = nil
+        guard applicationPreviewIndex != nil else { return }
+        guard
+            !animated || applicationPreviewMotion?.isPresenting != false
+        else {
+            return
+        }
+
+        let allowsMotion = animated
+            && applicationPreviewFrame.expansion > 0.001
+            && OrbitMotion.allowsMotion(
+                userEnabled: presentedAnimationsEnabled,
+                reduceMotion: NSWorkspace.shared
+                    .accessibilityDisplayShouldReduceMotion
+            )
+        guard allowsMotion else {
+            applicationPreviewMotion = nil
+            applicationPreviewTracksPill = false
+            applicationPreviewFrame = .hidden
+            applicationPreviewIndex = nil
+            applicationPreviewApplications.removeAll()
+            artworkRenderer?.setApplicationPreview(
+                index: nil,
+                icons: []
+            )
+            if renderImmediately {
+                renderArtwork()
+            }
+            return
+        }
+
+        applicationPreviewMotion = StatusApplicationPreviewMotion(
+            isPresenting: false,
+            fromFrame: applicationPreviewFrame,
+            startTime: CACurrentMediaTime()
+        )
+        if renderImmediately {
+            renderArtwork()
+        }
+        updateDisplayLinkState()
+    }
+
+    /// A Space change must not leave the expanded application pill behind
+    /// while the active pill starts a separate trip. When the preview belongs
+    /// to the active Space, its current pixels travel with the pill and shrink
+    /// on the exact same timeline. This keeps rapid swipe reversals
+    /// interruptible without introducing a duplicate source pill.
+    private func dismissApplicationPreviewForSpaceTransition(
+        sourceActiveIndex: Int,
+        startTime: TimeInterval,
+        fullDuration: TimeInterval
+    ) {
+        applicationPreviewTask?.cancel()
+        applicationPreviewTask = nil
+        guard applicationPreviewIndex != nil else {
+            applicationPreviewTracksPill = false
+            return
+        }
+
+        applicationPreviewTracksPill =
+            applicationPreviewTracksPill
+                || applicationPreviewIndex == sourceActiveIndex
+        let allowsMotion =
+            applicationPreviewFrame.expansion > 0.001
+            && OrbitMotion.allowsMotion(
+                userEnabled: presentedAnimationsEnabled,
+                reduceMotion: NSWorkspace.shared
+                    .accessibilityDisplayShouldReduceMotion
+            )
+        guard allowsMotion else {
+            applicationPreviewMotion = nil
+            applicationPreviewTracksPill = false
+            applicationPreviewFrame = .hidden
+            applicationPreviewIndex = nil
+            applicationPreviewApplications.removeAll()
+            artworkRenderer?.setApplicationPreview(
+                index: nil,
+                icons: []
+            )
+            return
+        }
+
+        applicationPreviewMotion = StatusApplicationPreviewMotion(
+            isPresenting: false,
+            fromFrame: applicationPreviewFrame,
+            startTime: startTime,
+            fullDuration: fullDuration
+        )
     }
 
     private func retargetHoveredIndicator() {
@@ -597,12 +1201,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func startHoverMotion(at index: Int, isHovered: Bool) {
+        let now = CACurrentMediaTime()
+        let fromScale = hoverScales[index]
+            ?? (hoverMotions[index].flatMap {
+                $0.frame(at: now).scale
+            } ?? CGSize(width: 1, height: 1))
         let motion = StatusHoverMotion(
             index: index,
-            fromScale: hoverScales[index] ?? CGSize(width: 1, height: 1),
+            fromScale: fromScale,
             isHovered: isHovered,
             isActive: index == renderedActiveIndex,
-            startTime: CACurrentMediaTime(),
+            startTime: now,
             shapeStyle: presentedShapeStyle
         )
 
@@ -623,8 +1232,31 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             return
         }
 
+        if motionIsNearRest(
+            fromScale: fromScale,
+            toScale: motion.targetScale
+        ) {
+            if isHovered {
+                hoverScales[index] = motion.targetScale
+            } else {
+                hoverScales[index] = nil
+            }
+            hoverMotions[index] = nil
+            renderArtwork()
+            updateDisplayLinkState()
+            return
+        }
+
         hoverMotions[index] = motion
         updateDisplayLinkState()
+    }
+
+    private func motionIsNearRest(
+        fromScale: CGSize,
+        toScale: CGSize
+    ) -> Bool {
+        abs(fromScale.width - toScale.width) < 0.001
+            && abs(fromScale.height - toScale.height) < 0.001
     }
 
     /// Stop spatial motion immediately when macOS enables Reduce Motion.
@@ -638,11 +1270,23 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         pillMotion = nil
         transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         hoverMotions.removeAll()
         hoverScales.removeAll()
         artworkRefreshMotion = nil
         artworkRefreshDidApplySettings = false
         artworkPresentation = .identity
+        if let applicationPreviewMotion {
+            if applicationPreviewMotion.isPresenting {
+                applicationPreviewFrame = .visible
+            } else {
+                applicationPreviewFrame = .hidden
+                applicationPreviewTracksPill = false
+                applicationPreviewIndex = nil
+                applicationPreviewApplications.removeAll()
+            }
+            self.applicationPreviewMotion = nil
+        }
 
         applyPendingVisualSettings()
 
@@ -664,6 +1308,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func showContextMenu(from button: NSStatusBarButton) {
         guard presentedMenu == nil else { return }
+        setHoveredIndex(nil)
         let menu = makeContextMenu()
         menu.delegate = self
         presentedMenu = menu
@@ -681,6 +1326,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard menu === presentedMenu else { return }
         statusItem.menu = nil
         presentedMenu = nil
+        if let button = statusItem.button {
+            synchronizeHoverLocation(for: button)
+        }
     }
 
     private func makeContextMenu() -> NSMenu {
@@ -746,7 +1394,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         } else {
             let newController = SettingsWindowController(
                 settings: settings,
-                viewModel: viewModel
+                viewModel: viewModel,
+                spaceApplicationReader: spaceApplicationReader
             )
             self.settingsWindowController = newController
             settingsWindowController = newController
@@ -815,6 +1464,20 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         pillMotion = nil
         transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
+        hoverMotions.removeAll()
+        artworkRefreshMotion = StatusArtworkRefreshMotion(
+            startTime: CACurrentMediaTime(),
+            initialPresentation: artworkPresentation
+        )
+        artworkRefreshDidApplySettings = false
+        updateDisplayLinkState()
+    }
+
+    private func beginStructureRefresh() {
+        pillMotion = nil
+        transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         hoverMotions.removeAll()
         artworkRefreshMotion = StatusArtworkRefreshMotion(
             startTime: CACurrentMediaTime(),

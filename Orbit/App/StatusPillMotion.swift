@@ -163,59 +163,112 @@ struct StatusPillMotion {
     let toX: CGFloat
     let initialWidth: CGFloat
     let initialHeight: CGFloat
+    let initialWaist: CGFloat
+    let initialAppearanceProgress: CGFloat
     let startTime: TimeInterval
     let duration: TimeInterval
     let sizeScale: CGFloat
     let itemWidth: CGFloat
     let style: IndicatorAnimationStyle
     let shapeStyle: IndicatorShapeStyle
+    let isRetargeting: Bool
 
     init(
         fromX: CGFloat,
         toX: CGFloat,
         initialWidth: CGFloat = 12,
         initialHeight: CGFloat = 7,
+        initialWaist: CGFloat = 0,
+        initialAppearanceProgress: CGFloat = 0,
         startTime: TimeInterval,
         sizeScale: CGFloat = 1,
         itemWidth: CGFloat = StatusItemArtwork.itemWidth,
         style: IndicatorAnimationStyle = .seamless,
-        shapeStyle: IndicatorShapeStyle = .standard
+        shapeStyle: IndicatorShapeStyle = .standard,
+        isRetargeting: Bool = false
     ) {
         self.fromX = fromX
         self.toX = toX
         self.initialWidth = initialWidth
         self.initialHeight = initialHeight
+        self.initialWaist = min(max(initialWaist, 0), 1)
+        self.initialAppearanceProgress = min(
+            max(initialAppearanceProgress, 0),
+            1
+        )
         self.startTime = startTime
         self.sizeScale = sizeScale
         self.itemWidth = itemWidth
         self.style = style
         self.shapeStyle = shapeStyle
+        self.isRetargeting = isRetargeting
 
-        let distance = abs(toX - fromX)
-        let crossedSpaces = max(distance / itemWidth, 1)
+        let baseDuration: TimeInterval
         switch style {
         case .seamless:
-            // Give the shape enough time to be read as a morph instead of a
-            // pill sliding between two points. Longer jumps receive a little
-            // more travel time without ever becoming sluggish.
-            duration = min(
-                OrbitMotion.seamlessDuration
-                    + min(TimeInterval(crossedSpaces - 1) * 0.02, 0.08),
-                OrbitMotion.maximumFeedbackDuration
-            )
+            baseDuration = OrbitMotion.seamlessDuration
         case .classic:
-            duration = min(
-                OrbitMotion.classicDuration
-                    + min(TimeInterval(crossedSpaces - 1) * 0.015, 0.05),
-                OrbitMotion.maximumFeedbackDuration
-            )
+            baseDuration = OrbitMotion.classicDuration
         case .continuous:
-            duration = min(
-                OrbitMotion.continuousDuration
-                    + min(TimeInterval(crossedSpaces - 1) * 0.01, 0.04),
-                OrbitMotion.maximumFeedbackDuration
-            )
+            baseDuration = OrbitMotion.continuousDuration
         }
+
+        if isRetargeting {
+            let activeSize = shapeStyle.activeIndicatorSize(
+                sizeScale: sizeScale
+            )
+            let sourceLeft = fromX - initialWidth / 2
+            let sourceRight = fromX + initialWidth / 2
+            let targetLeft = toX - activeSize.width / 2
+            let targetRight = toX + activeSize.width / 2
+            let maximumEdgeTravel = max(
+                abs(targetLeft - sourceLeft),
+                abs(targetRight - sourceRight)
+            )
+            let remainingFraction = min(
+                max(maximumEdgeTravel / max(itemWidth, 0.001), 0),
+                1
+            )
+            let durationScale = max(sqrt(remainingFraction), 0.44)
+            duration = min(
+                max(
+                    baseDuration * TimeInterval(durationScale),
+                    baseDuration
+                ),
+                baseDuration
+            )
+        } else {
+            duration = baseDuration
+        }
+    }
+
+    /// Continues a status-bar transition from the frame AppKit has already
+    /// presented. An interrupted motion must settle directly toward the new
+    /// target: replaying the classic stretch choreography gives even a tiny
+    /// remaining distance a full-duration launch phase, which reads as a
+    /// stopped frame followed by a jump during a rapid Space reversal.
+    static func statusBarContinuation(
+        from frame: StatusPillFrame,
+        toX: CGFloat,
+        startTime: TimeInterval,
+        sizeScale: CGFloat,
+        itemWidth: CGFloat,
+        shapeStyle: IndicatorShapeStyle,
+        style: IndicatorAnimationStyle
+    ) -> Self {
+        Self(
+            fromX: frame.x,
+            toX: toX,
+            initialWidth: frame.width,
+            initialHeight: frame.height,
+            initialWaist: frame.waist,
+            startTime: startTime,
+            sizeScale: sizeScale,
+            itemWidth: itemWidth,
+            style: style,
+            shapeStyle: shapeStyle,
+            isRetargeting: true
+        )
     }
 
     func frame(at timestamp: TimeInterval) -> StatusPillFrame {
@@ -232,12 +285,16 @@ struct StatusPillMotion {
                 x: fromX,
                 width: initialWidth,
                 height: initialHeight,
-                progress: 0,
+                waist: initialWaist,
+                progress: initialAppearanceProgress,
                 isComplete: false
             )
         }
 
         let progress = min(max(rawProgress, 0), 1)
+        if isRetargeting {
+            return retargetingFrame(progress: progress)
+        }
         let crossedSpaces = max(
             abs(toX - fromX) / itemWidth,
             1
@@ -256,6 +313,37 @@ struct StatusPillMotion {
         case .continuous:
             return continuousFrame(progress: progress)
         }
+    }
+
+    /// An interrupted transition must start from the exact presentation frame
+    /// already on screen. Replaying a style's enter choreography from a
+    /// stretched bridge can leave its only moving edge in a delayed phase.
+    /// This direct settle keeps every geometric component continuous, moves
+    /// immediately, and eases to the new resting indicator without a plateau.
+    private func retargetingFrame(progress: CGFloat) -> StatusPillFrame {
+        let activeSize = shapeStyle.activeIndicatorSize(
+            sizeScale: sizeScale
+        )
+        let sourceLeft = fromX - initialWidth / 2
+        let sourceRight = fromX + initialWidth / 2
+        let targetLeft = toX - activeSize.width / 2
+        let targetRight = toX + activeSize.width / 2
+        let settled = interruptibleEaseOut(progress)
+        let left = interpolate(sourceLeft, targetLeft, settled)
+        let right = interpolate(sourceRight, targetRight, settled)
+
+        return StatusPillFrame(
+            x: (left + right) / 2,
+            width: max(right - left, 0.5 * sizeScale),
+            height: interpolate(
+                initialHeight,
+                activeSize.height,
+                settled
+            ),
+            waist: interpolate(initialWaist, 0, settled),
+            progress: appearanceProgress(for: settled),
+            isComplete: false
+        )
     }
 
     /// Extends the leading edge to the destination before releasing the
@@ -302,7 +390,7 @@ struct StatusPillMotion {
                 progress: progress,
                 bridgeWidth: max(right - left, 0)
             ),
-            progress: progress,
+            progress: appearanceProgress(for: progress),
             isComplete: false
         )
     }
@@ -369,7 +457,7 @@ struct StatusPillMotion {
                     activeSize.height
                 ]
             ),
-            progress: progress,
+            progress: appearanceProgress(for: progress),
             isComplete: false
         )
     }
@@ -407,7 +495,8 @@ struct StatusPillMotion {
                     activeSize.height
                 ]
             ),
-            progress: progress,
+            waist: initialWaist * (1 - smootherStep(progress)),
+            progress: appearanceProgress(for: progress),
             isComplete: false
         )
     }
@@ -532,6 +621,20 @@ struct StatusPillMotion {
             + 3 * value * value * (1 - second)
     }
 
+    private func appearanceProgress(for progress: CGFloat) -> CGFloat {
+        initialAppearanceProgress
+            + (1 - initialAppearanceProgress) * progress
+    }
+
+    /// Cubic Hermite interpolation with unit initial velocity and zero final
+    /// velocity. Unlike smoothstep it reacts on the first sampled frame while
+    /// still arriving without an abrupt stop.
+    private func interruptibleEaseOut(_ value: CGFloat) -> CGFloat {
+        let clamped = min(max(value, 0), 1)
+        return clamped + clamped * clamped
+            - clamped * clamped * clamped
+    }
+
     private func smootherStep(_ value: CGFloat) -> CGFloat {
         let clamped = min(max(value, 0), 1)
         return clamped * clamped * clamped
@@ -570,10 +673,8 @@ struct StatusHoverMotion {
     let index: Int
     let fromScale: CGSize
     let targetScale: CGSize
-    let peakScale: CGSize
     let startTime: TimeInterval
     let duration: TimeInterval
-    let peakTime: CGFloat
 
     init(
         index: Int,
@@ -589,49 +690,24 @@ struct StatusHoverMotion {
 
         if isHovered {
             duration = OrbitMotion.hoverEnterDuration
-            peakTime = 0.68
             if isActive {
                 if shapeStyle == .circles {
                     targetScale = CGSize(width: 1.32, height: 1.32)
-                    peakScale = CGSize(width: 1.38, height: 1.38)
                 } else {
                     targetScale = CGSize(width: 1.38, height: 1.25)
-                    peakScale = CGSize(
-                        width: Self.maximumHorizontalScale,
-                        height: 1.22
-                    )
                 }
             } else if shapeStyle == .circles {
                 let target = 7.75 / StatusItemArtwork.dotDiameter
-                let peak = 8 / StatusItemArtwork.dotDiameter
                 targetScale = CGSize(width: target, height: target)
-                peakScale = CGSize(width: peak, height: peak)
             } else {
                 targetScale = CGSize(
                     width: 11.75 / StatusItemArtwork.dotDiameter,
                     height: 7.75 / StatusItemArtwork.dotDiameter
                 )
-                peakScale = CGSize(
-                    width: 12.3 / StatusItemArtwork.dotDiameter,
-                    height: 7.6 / StatusItemArtwork.dotDiameter
-                )
             }
         } else {
             duration = OrbitMotion.hoverExitDuration
-            peakTime = 0.86
             targetScale = CGSize(width: 1, height: 1)
-            if isActive {
-                peakScale = shapeStyle == .circles
-                    ? CGSize(width: 1.01, height: 1.01)
-                    : CGSize(width: 0.99, height: 1.02)
-            } else if shapeStyle == .circles {
-                peakScale = CGSize(width: 1.02, height: 1.02)
-            } else {
-                peakScale = CGSize(
-                    width: 4.35 / StatusItemArtwork.dotDiameter,
-                    height: 4.65 / StatusItemArtwork.dotDiameter
-                )
-            }
         }
     }
 
@@ -645,21 +721,26 @@ struct StatusHoverMotion {
         }
 
         let progress = min(max(rawProgress, 0), 1)
-        let scale: CGSize
-        if progress < peakTime {
-            let localProgress = smoothStep(progress / peakTime)
-            scale = interpolate(fromScale, peakScale, localProgress)
-        } else {
-            let localProgress = smoothStep(
-                (progress - peakTime) / (1 - peakTime)
-            )
-            scale = interpolate(peakScale, targetScale, localProgress)
-        }
+        let isExpanding = targetScale.width >= fromScale.width
+            && targetScale.height >= fromScale.height
+        let easedProgress = hoverProgress(progress, isExpanding: isExpanding)
+        let scale = interpolate(
+            fromScale,
+            targetScale,
+            easedProgress
+        )
         return StatusHoverFrame(scale: scale, isComplete: false)
     }
 
-    private func smoothStep(_ value: CGFloat) -> CGFloat {
+    private func hoverProgress(
+        _ value: CGFloat,
+        isExpanding: Bool
+    ) -> CGFloat {
         let clamped = min(max(value, 0), 1)
+        if isExpanding {
+            // Snappy rise for initial hover feedback: no stall at the first frame.
+            return 1 - (1 - clamped) * (1 - clamped)
+        }
         return clamped * clamped * (3 - 2 * clamped)
     }
 

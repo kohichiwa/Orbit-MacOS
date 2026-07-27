@@ -10,12 +10,19 @@ enum OrbitMotion {
     /// Every Orbit animation is routed through this policy so the in-app
     /// switch and the system Reduce Motion preference cannot drift apart.
     nonisolated static let maximumFeedbackDuration: TimeInterval = 0.50
-    nonisolated static let seamlessDuration: TimeInterval = 0.42
-    nonisolated static let classicDuration: TimeInterval = 0.235
-    nonisolated static let continuousDuration: TimeInterval = 0.46
-    nonisolated static let hoverEnterDuration: TimeInterval = 0.22
+    nonisolated static let indicatorDuration: TimeInterval = 0.235
+    nonisolated static let seamlessDuration: TimeInterval = indicatorDuration
+    nonisolated static let classicDuration: TimeInterval = indicatorDuration
+    nonisolated static let continuousDuration: TimeInterval = indicatorDuration
+    nonisolated static let hoverEnterDuration: TimeInterval = 0.30
     nonisolated static let hoverExitDuration: TimeInterval = 0.30
-    nonisolated static let paletteDuration: TimeInterval = 0.28
+    nonisolated static let applicationPreviewHoverDelay: TimeInterval = 0.16
+    nonisolated static let applicationPreviewRefreshInterval: TimeInterval = 0.60
+    nonisolated static let applicationPreviewEnterDuration: TimeInterval =
+        0.30
+    nonisolated static let applicationPreviewExitDuration: TimeInterval =
+        0.28
+    nonisolated static let paletteDuration: TimeInterval = 0.34
     nonisolated static let colorDuration: TimeInterval = 0.20
     nonisolated static let pressDuration: TimeInterval = 0.10
     nonisolated static let selectionHoverDuration: TimeInterval = 0.14
@@ -73,7 +80,7 @@ enum OrbitMotion {
         if reduceMotion {
             return .easeOut(duration: reducedMotionFadeDuration)
         }
-        return .snappy(duration: paletteDuration, extraBounce: 0)
+        return .smooth(duration: paletteDuration, extraBounce: 0)
     }
 
     static func selectionHover(reduceMotion: Bool) -> Animation? {

@@ -484,9 +484,9 @@ final class SpaceViewModelTests: XCTestCase {
     @MainActor
     func testPopupPlacementKeepsBubbleInsideWindowAndPointerOnIndicator() {
         let containerWidth: CGFloat = 540
-        let bubbleWidth: CGFloat = 170
+        let bubbleWidth: CGFloat = 238
         let interfaceInset: CGFloat = 24
-        let pointerEdgeInset: CGFloat = 29
+        let pointerEdgeInset: CGFloat = 31
         let halfContainer = containerWidth / 2
         let halfBubble = bubbleWidth / 2
         let maximumPointerOffset = halfBubble - pointerEdgeInset
@@ -514,7 +514,7 @@ final class SpaceViewModelTests: XCTestCase {
             )
         }
 
-        for anchorOffset in [-216.0, 0, 216.0] {
+        for anchorOffset in [-215.0, 0, 215.0] {
             let placement = PopupHorizontalPlacement.resolve(
                 anchorOffset: anchorOffset,
                 containerWidth: containerWidth,
@@ -722,6 +722,174 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInterruptedPillMotionRetargetsWithoutAPlateau() {
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+
+        for style in IndicatorAnimationStyle.allCases {
+            let forward = StatusPillMotion(
+                fromX: source,
+                toX: target,
+                startTime: 10,
+                style: style
+            )
+            let interruptionTime = 10 + forward.duration * 0.42
+            let interruptedFrame = forward.frame(at: interruptionTime)
+            let reverse = StatusPillMotion(
+                fromX: interruptedFrame.x,
+                toX: source,
+                initialWidth: interruptedFrame.width,
+                initialHeight: interruptedFrame.height,
+                initialWaist: interruptedFrame.waist,
+                initialAppearanceProgress:
+                    1 - interruptedFrame.progress,
+                startTime: interruptionTime,
+                style: style,
+                isRetargeting: true
+            )
+            let firstFrame = reverse.frame(at: interruptionTime)
+
+            XCTAssertEqual(
+                firstFrame.x,
+                interruptedFrame.x,
+                accuracy: 0.0001
+            )
+            XCTAssertEqual(
+                firstFrame.width,
+                interruptedFrame.width,
+                accuracy: 0.0001
+            )
+            XCTAssertEqual(
+                firstFrame.height,
+                interruptedFrame.height,
+                accuracy: 0.0001
+            )
+            XCTAssertEqual(
+                firstFrame.waist,
+                interruptedFrame.waist,
+                accuracy: 0.0001
+            )
+            XCTAssertEqual(
+                firstFrame.progress,
+                1 - interruptedFrame.progress,
+                accuracy: 0.0001
+            )
+
+            for refreshRate in [60.0, 120.0] {
+                let nextFrame = reverse.frame(
+                    at: interruptionTime + 1 / refreshRate
+                )
+                XCTAssertLessThan(
+                    nextFrame.x + nextFrame.width / 2,
+                    firstFrame.x + firstFrame.width / 2,
+                    "Retargeting \(style) paused at \(refreshRate) Hz"
+                )
+            }
+
+            XCTAssertEqual(
+                reverse.frame(at: interruptionTime + reverse.duration),
+                .resting(at: source)
+            )
+            XCTAssertLessThanOrEqual(reverse.duration, 0.30)
+        }
+    }
+
+    @MainActor
+    func testStatusBarContinuationUsesThePresentedFrameWithoutPausing() {
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+        let presentedFrame = StatusPillFrame(
+            x: target - 4,
+            width: 18,
+            height: 6,
+            waist: 0.65,
+            progress: 0.48,
+            isComplete: false
+        )
+        let startTime: TimeInterval = 30
+        let continuation = StatusPillMotion.statusBarContinuation(
+            from: presentedFrame,
+            toX: source,
+            startTime: startTime,
+            sizeScale: 1,
+            itemWidth: StatusItemArtwork.itemWidth,
+            shapeStyle: .standard
+        )
+
+        XCTAssertTrue(continuation.isRetargeting)
+        let first = continuation.frame(at: startTime)
+        XCTAssertEqual(first.x, presentedFrame.x, accuracy: 0.0001)
+        XCTAssertEqual(first.width, presentedFrame.width, accuracy: 0.0001)
+        XCTAssertEqual(first.height, presentedFrame.height, accuracy: 0.0001)
+        XCTAssertEqual(first.waist, presentedFrame.waist, accuracy: 0.0001)
+
+        for refreshRate in [60.0, 120.0] {
+            let next = continuation.frame(
+                at: startTime + 1 / refreshRate
+            )
+            XCTAssertLessThan(
+                next.x,
+                first.x,
+                "Status-bar continuation paused at \(refreshRate) Hz"
+            )
+            XCTAssertLessThan(
+                next.waist,
+                first.waist,
+                "The interrupted bridge must settle continuously"
+            )
+        }
+
+        XCTAssertEqual(
+            continuation.frame(at: startTime + continuation.duration),
+            .resting(at: source)
+        )
+    }
+
+    @MainActor
+    func testStatusBarContinuationScalesDurationForShortReversal() {
+        let target = StatusItemArtwork.centerX(for: 0)
+        let presentedFrame = StatusPillFrame(
+            x: target + 1.5,
+            width: 13,
+            height: 7,
+            waist: 0.12,
+            progress: 0.16,
+            isComplete: false
+        )
+        let startTime: TimeInterval = 40
+        let continuation = StatusPillMotion.statusBarContinuation(
+            from: presentedFrame,
+            toX: target,
+            startTime: startTime,
+            sizeScale: 1,
+            itemWidth: StatusItemArtwork.itemWidth,
+            shapeStyle: .standard
+        )
+
+        XCTAssertLessThan(
+            continuation.duration,
+            OrbitMotion.classicDuration,
+            "A near-endpoint reversal must not replay a full transition"
+        )
+
+        for refreshRate in [60.0, 120.0] {
+            let next = continuation.frame(
+                at: startTime + 1 / refreshRate
+            )
+            XCTAssertLessThan(
+                abs(next.x - target),
+                abs(presentedFrame.x - target),
+                "A short reversal must advance on its first visible frame"
+            )
+            XCTAssertLessThan(
+                next.width,
+                presentedFrame.width,
+                "The interrupted shape must settle instead of stretching again"
+            )
+        }
+    }
+
+    @MainActor
     func testPillFeedbackMotionAlwaysStaysBrief() {
         for style in IndicatorAnimationStyle.allCases {
             let motion = StatusPillMotion(
@@ -773,7 +941,7 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHoverMotionUsesLiquidEntryAndThirtyHundredthsExit() {
+    func testHoverMotionUsesSingleStepProfile() {
         let resting = CGSize(width: 1, height: 1)
         let entry = StatusHoverMotion(
             index: 1,
@@ -782,13 +950,17 @@ final class SpaceViewModelTests: XCTestCase {
             isActive: false,
             startTime: 10
         )
-        XCTAssertEqual(entry.duration, 0.22, accuracy: 0.001)
+        XCTAssertEqual(entry.duration, 0.30, accuracy: 0.001)
         XCTAssertEqual(entry.targetScale.width, 11.75 / 4.5, accuracy: 0.001)
         XCTAssertEqual(entry.targetScale.height, 7.75 / 4.5, accuracy: 0.001)
 
-        let peak = entry.frame(at: 10 + entry.duration * entry.peakTime)
-        XCTAssertGreaterThan(peak.scale.width, entry.targetScale.width)
-        XCTAssertLessThan(peak.scale.height, entry.targetScale.height)
+        let midpoint = entry.frame(at: 10 + entry.duration * 0.5)
+        XCTAssertGreaterThan(midpoint.scale.width, resting.width)
+        XCTAssertLessThanOrEqual(midpoint.scale.width, entry.targetScale.width)
+        XCTAssertLessThanOrEqual(midpoint.scale.height, entry.targetScale.height)
+        let finished = entry.frame(at: 10 + entry.duration)
+        XCTAssertEqual(finished.scale.width, entry.targetScale.width, accuracy: 0.001)
+        XCTAssertEqual(finished.scale.height, entry.targetScale.height, accuracy: 0.001)
 
         let exit = StatusHoverMotion(
             index: 1,
@@ -798,9 +970,9 @@ final class SpaceViewModelTests: XCTestCase {
             startTime: 20
         )
         XCTAssertEqual(exit.duration, 0.30, accuracy: 0.001)
-        let finished = exit.frame(at: 20 + exit.duration)
-        XCTAssertTrue(finished.isComplete)
-        XCTAssertEqual(finished.scale, resting)
+        let exitFinished = exit.frame(at: 20 + exit.duration)
+        XCTAssertTrue(exitFinished.isComplete)
+        XCTAssertEqual(exitFinished.scale, resting)
 
         let activeEntry = StatusHoverMotion(
             index: 0,
@@ -811,6 +983,745 @@ final class SpaceViewModelTests: XCTestCase {
         )
         XCTAssertEqual(activeEntry.targetScale.width, 1.38, accuracy: 0.001)
         XCTAssertEqual(activeEntry.targetScale.height, 1.25, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testApplicationPreviewUsesClassicStretchAndSmoothExit() {
+        let entry = StatusApplicationPreviewMotion(
+            isPresenting: true,
+            fromFrame: .hidden,
+            startTime: 10
+        )
+        let stretched = entry.frame(
+            at: 10 + entry.duration * 0.62
+        )
+        let settled = entry.frame(
+            at: 10 + entry.duration * 0.82
+        )
+        let firstSixtyHertzFrame = entry.frame(at: 10 + 1.0 / 60.0)
+        XCTAssertGreaterThan(stretched.expansion, 0.1)
+        XCTAssertGreaterThan(settled.expansion, stretched.expansion)
+        XCTAssertGreaterThan(
+            firstSixtyHertzFrame.expansion,
+            0.005,
+            "The preview should not appear stationary in its first visible frame"
+        )
+        XCTAssertEqual(
+            entry.frame(at: 10 + entry.duration),
+            .visible
+        )
+
+        let exit = StatusApplicationPreviewMotion(
+            isPresenting: false,
+            fromFrame: .visible,
+            startTime: 20
+        )
+        let middle = exit.frame(at: 20 + exit.duration / 2)
+        XCTAssertGreaterThan(middle.expansion, 0)
+        XCTAssertLessThan(middle.expansion, 1)
+        XCTAssertEqual(exit.frame(at: 20 + exit.duration), .hidden)
+    }
+
+    @MainActor
+    func testApplicationPreviewRapidReversalsStartFromThePresentedFrame() {
+        for refreshRate in [60.0, 120.0] {
+            let enter = StatusApplicationPreviewMotion(
+                isPresenting: true,
+                fromFrame: .hidden,
+                startTime: 10
+            )
+            let interruptionTime = 10 + enter.duration * 0.43
+            let presented = enter.frame(at: interruptionTime)
+            let exit = StatusApplicationPreviewMotion(
+                isPresenting: false,
+                fromFrame: presented,
+                startTime: interruptionTime
+            )
+
+            XCTAssertEqual(
+                exit.frame(at: interruptionTime),
+                presented,
+                "Exit must reuse the exact visible frame at \(refreshRate) Hz"
+            )
+            let firstExitFrame = exit.frame(
+                at: interruptionTime + 1 / refreshRate
+            )
+            XCTAssertLessThan(firstExitFrame.expansion, presented.expansion)
+            XCTAssertLessThan(firstExitFrame.iconOpacity, presented.iconOpacity)
+
+            let reverseTime = interruptionTime + 1 / refreshRate
+            let reenter = StatusApplicationPreviewMotion(
+                isPresenting: true,
+                fromFrame: firstExitFrame,
+                startTime: reverseTime
+            )
+            XCTAssertEqual(
+                reenter.frame(at: reverseTime),
+                firstExitFrame,
+                "A second reversal must not insert a ghost frame"
+            )
+            let firstReentryFrame = reenter.frame(
+                at: reverseTime + 1 / refreshRate
+            )
+            XCTAssertGreaterThan(
+                firstReentryFrame.expansion,
+                firstExitFrame.expansion
+            )
+            XCTAssertGreaterThan(
+                firstReentryFrame.iconOpacity,
+                firstExitFrame.iconOpacity
+            )
+        }
+    }
+
+    @MainActor
+    func testApplicationPreviewExpansionPreservesNeighborSpacing() throws {
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        let renderer = StatusIndicatorImageRenderer(
+            count: 3,
+            applicationPreviewIndex: 1,
+            applicationIcons: [icon, icon]
+        )
+        let hover = StatusHoverMotion(
+            index: 1,
+            fromScale: CGSize(width: 1, height: 1),
+            isHovered: true,
+            isActive: false,
+            startTime: 0
+        )
+        renderer.update(
+            pill: .resting(at: StatusItemArtwork.centerX(for: 0)),
+            activeIndex: 0,
+            hoverScales: [1: hover.targetScale],
+            applicationPreviewFrame: .visible
+        )
+
+        let left = try XCTUnwrap(renderer.indicatorCenterX(at: 0))
+        let preview = try XCTUnwrap(renderer.indicatorCenterX(at: 1))
+        let right = try XCTUnwrap(renderer.indicatorCenterX(at: 2))
+        let expectedDistance = StatusItemArtwork.itemWidth
+            + renderer.currentApplicationPreviewExtraWidth / 2
+
+        XCTAssertGreaterThan(renderer.currentApplicationPreviewExtraWidth, 0)
+        XCTAssertEqual(preview - left, expectedDistance, accuracy: 0.001)
+        XCTAssertEqual(right - preview, expectedDistance, accuracy: 0.001)
+        XCTAssertEqual(renderer.indicatorIndex(atImageX: preview), 1)
+    }
+
+    @MainActor
+    func testExpandedPreviewMapsMovingPillContinuouslyAcrossItsCell() {
+        let previewX: CGFloat = 100
+        let itemWidth: CGFloat = 20
+        let extraWidth: CGFloat = 40
+
+        XCTAssertEqual(
+            StatusIndicatorImageRenderer.applicationPreviewLayoutShift(
+                baseX: previewX - itemWidth,
+                previewBaseX: previewX,
+                itemWidth: itemWidth,
+                extraWidth: extraWidth
+            ),
+            0,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            StatusIndicatorImageRenderer.applicationPreviewLayoutShift(
+                baseX: previewX,
+                previewBaseX: previewX,
+                itemWidth: itemWidth,
+                extraWidth: extraWidth
+            ),
+            extraWidth / 2,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            StatusIndicatorImageRenderer.applicationPreviewLayoutShift(
+                baseX: previewX + itemWidth,
+                previewBaseX: previewX,
+                itemWidth: itemWidth,
+                extraWidth: extraWidth
+            ),
+            extraWidth,
+            accuracy: 0.0001
+        )
+
+        let immediatelyBefore =
+            StatusIndicatorImageRenderer.applicationPreviewLayoutShift(
+                baseX: previewX - 0.001,
+                previewBaseX: previewX,
+                itemWidth: itemWidth,
+                extraWidth: extraWidth
+            )
+        let immediatelyAfter =
+            StatusIndicatorImageRenderer.applicationPreviewLayoutShift(
+                baseX: previewX + 0.001,
+                previewBaseX: previewX,
+                itemWidth: itemWidth,
+                extraWidth: extraWidth
+            )
+        XCTAssertLessThan(
+            immediatelyAfter - immediatelyBefore,
+            0.01,
+            "Crossing an expanded preview must not jump by half its width"
+        )
+    }
+
+    @MainActor
+    func testReverseTransitionPreservesRenderedAppearanceAtInterruption() throws {
+        let renderer = StatusIndicatorImageRenderer(
+            count: 2,
+            indicatorKinds: [
+                .desktop(colorIndex: 0),
+                .fullscreen(colorIndex: 1)
+            ],
+            indicatorColors: [.systemRed, .systemBlue]
+        )
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+        let forward = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: 20,
+            style: .continuous
+        )
+        let interruptionTime = 20 + forward.duration * 0.42
+        let interruptedFrame = forward.frame(at: interruptionTime)
+        renderer.update(
+            pill: interruptedFrame,
+            activeIndex: 1,
+            transitionSourceIndex: 0
+        )
+        let forwardPixels = try XCTUnwrap(
+            renderer.image.representations.first as? NSBitmapImageRep
+        )
+        let byteCount =
+            forwardPixels.bytesPerRow * forwardPixels.pixelsHigh
+        let forwardBytes = Array(
+            UnsafeBufferPointer(
+                start: try XCTUnwrap(forwardPixels.bitmapData),
+                count: byteCount
+            )
+        )
+
+        let reverse = StatusPillMotion(
+            fromX: interruptedFrame.x,
+            toX: source,
+            initialWidth: interruptedFrame.width,
+            initialHeight: interruptedFrame.height,
+            initialWaist: interruptedFrame.waist,
+            initialAppearanceProgress: 1 - interruptedFrame.progress,
+            startTime: interruptionTime,
+            style: .continuous,
+            isRetargeting: true
+        )
+        renderer.update(
+            pill: reverse.frame(at: interruptionTime),
+            activeIndex: 0,
+            transitionSourceIndex: 1
+        )
+        let reversePixels = try XCTUnwrap(
+            renderer.image.representations.first as? NSBitmapImageRep
+        )
+        let reverseBytes = Array(
+            UnsafeBufferPointer(
+                start: try XCTUnwrap(reversePixels.bitmapData),
+                count: byteCount
+            )
+        )
+
+        XCTAssertEqual(
+            reverseBytes,
+            forwardBytes,
+            "A reverse gesture must begin from the exact rendered frame"
+        )
+    }
+
+    @MainActor
+    func testForwardRetargetPreservesRenderedAppearanceAtInterruption() throws {
+        let renderer = StatusIndicatorImageRenderer(
+            count: 3,
+            indicatorKinds: [
+                .desktop(colorIndex: 0),
+                .fullscreen(colorIndex: 1),
+                .desktop(colorIndex: 2)
+            ],
+            indicatorColors: [
+                .systemRed,
+                .systemBlue,
+                .systemGreen
+            ]
+        )
+        let source = StatusItemArtwork.centerX(for: 0)
+        let middle = StatusItemArtwork.centerX(for: 1)
+        let target = StatusItemArtwork.centerX(for: 2)
+        let forward = StatusPillMotion(
+            fromX: source,
+            toX: middle,
+            startTime: 30,
+            style: .continuous
+        )
+        let interruptionTime = 30 + forward.duration * 0.42
+        let interruptedFrame = forward.frame(at: interruptionTime)
+        renderer.update(
+            pill: interruptedFrame,
+            activeIndex: 1,
+            transitionSourceIndex: 0
+        )
+        let initialPixels = try XCTUnwrap(
+            renderer.image.representations.first as? NSBitmapImageRep
+        )
+        let byteCount =
+            initialPixels.bytesPerRow * initialPixels.pixelsHigh
+        let initialBytes = Array(
+            UnsafeBufferPointer(
+                start: try XCTUnwrap(initialPixels.bitmapData),
+                count: byteCount
+            )
+        )
+        let interruptedPresentation = try XCTUnwrap(
+            renderer.transitionPresentationSnapshot(
+                for: interruptedFrame
+            )
+        )
+
+        let retarget = StatusPillMotion(
+            fromX: interruptedFrame.x,
+            toX: target,
+            initialWidth: interruptedFrame.width,
+            initialHeight: interruptedFrame.height,
+            initialWaist: interruptedFrame.waist,
+            startTime: interruptionTime,
+            style: .continuous,
+            isRetargeting: true
+        )
+        renderer.update(
+            pill: retarget.frame(at: interruptionTime),
+            activeIndex: 2,
+            transitionSourceIndex: 1,
+            interruptedTransitionPresentation:
+                interruptedPresentation
+        )
+        let retargetedPixels = try XCTUnwrap(
+            renderer.image.representations.first as? NSBitmapImageRep
+        )
+        let retargetedBytes = Array(
+            UnsafeBufferPointer(
+                start: try XCTUnwrap(retargetedPixels.bitmapData),
+                count: byteCount
+            )
+        )
+
+        XCTAssertEqual(
+            retargetedBytes,
+            initialBytes,
+            "A rapid A → B → C gesture must not flash at retarget"
+        )
+
+        let secondInterruptionTime =
+            interruptionTime + retarget.duration * 0.37
+        let secondInterruptedFrame = retarget.frame(
+            at: secondInterruptionTime
+        )
+        renderer.update(
+            pill: secondInterruptedFrame,
+            activeIndex: 2,
+            transitionSourceIndex: 1,
+            interruptedTransitionPresentation:
+                interruptedPresentation
+        )
+        let secondInitialPixels = try XCTUnwrap(
+            renderer.image.representations.first as? NSBitmapImageRep
+        )
+        let secondInitialBytes = Array(
+            UnsafeBufferPointer(
+                start: try XCTUnwrap(secondInitialPixels.bitmapData),
+                count: byteCount
+            )
+        )
+        let secondInterruptedPresentation = try XCTUnwrap(
+            renderer.transitionPresentationSnapshot(
+                for: secondInterruptedFrame
+            )
+        )
+        let secondRetarget = StatusPillMotion(
+            fromX: secondInterruptedFrame.x,
+            toX: middle,
+            initialWidth: secondInterruptedFrame.width,
+            initialHeight: secondInterruptedFrame.height,
+            initialWaist: secondInterruptedFrame.waist,
+            startTime: secondInterruptionTime,
+            style: .continuous,
+            isRetargeting: true
+        )
+        renderer.update(
+            pill: secondRetarget.frame(at: secondInterruptionTime),
+            activeIndex: 1,
+            transitionSourceIndex: 2,
+            interruptedTransitionPresentation:
+                secondInterruptedPresentation
+        )
+        let secondRetargetPixels = try XCTUnwrap(
+            renderer.image.representations.first as? NSBitmapImageRep
+        )
+        let secondRetargetBytes = Array(
+            UnsafeBufferPointer(
+                start: try XCTUnwrap(secondRetargetPixels.bitmapData),
+                count: byteCount
+            )
+        )
+
+        XCTAssertEqual(
+            secondRetargetBytes,
+            secondInitialBytes,
+            "Repeated retargets must preserve the exact rendered frame"
+        )
+    }
+
+    @MainActor
+    func testApplicationPreviewCollapsesContinuouslyDuringSpaceTransition() {
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        let renderer = StatusIndicatorImageRenderer(
+            count: 3,
+            applicationPreviewIndex: 0,
+            applicationIcons: [icon, icon],
+            maximumApplicationPreviewIconCount: 2
+        )
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+        renderer.update(
+            pill: .resting(at: source),
+            activeIndex: 0,
+            applicationPreviewFrame: .visible
+        )
+        let expandedWidth = renderer.currentApplicationPreviewExtraWidth
+
+        let transition = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: 0,
+            style: .continuous
+        )
+        let transitionFrame = transition.frame(
+            at: transition.duration * 0.20
+        )
+        let exit = StatusApplicationPreviewMotion(
+            isPresenting: false,
+            fromFrame: .visible,
+            startTime: 0
+        )
+        let firstExitFrame = exit.frame(at: 1.0 / 120.0)
+        renderer.update(
+            pill: transitionFrame,
+            activeIndex: 1,
+            transitionSourceIndex: 0,
+            applicationPreviewFrame: firstExitFrame
+        )
+
+        XCTAssertGreaterThan(
+            renderer.currentApplicationPreviewExtraWidth,
+            0
+        )
+        XCTAssertLessThan(
+            renderer.currentApplicationPreviewExtraWidth,
+            expandedWidth
+        )
+
+        renderer.update(
+            pill: transitionFrame,
+            activeIndex: 1,
+            transitionSourceIndex: 0,
+            applicationPreviewFrame: .hidden
+        )
+        XCTAssertEqual(
+            renderer.currentApplicationPreviewExtraWidth,
+            0,
+            accuracy: 0.0001
+        )
+    }
+
+    @MainActor
+    func testExpandedActivePreviewHandsOffToSpaceTransitionWithoutFlash()
+        throws
+    {
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        let renderer = StatusIndicatorImageRenderer(
+            count: 3,
+            applicationPreviewIndex: 0,
+            applicationIcons: [icon, icon],
+            maximumApplicationPreviewIconCount: 2
+        )
+        let source = StatusItemArtwork.centerX(for: 0)
+        let target = StatusItemArtwork.centerX(for: 1)
+        renderer.update(
+            pill: .resting(at: source),
+            activeIndex: 0,
+            applicationPreviewFrame: .visible
+        )
+        let expandedPixels = try pixelBytes(of: renderer.image)
+
+        let transition = StatusPillMotion(
+            fromX: source,
+            toX: target,
+            startTime: 0,
+            style: .continuous
+        )
+        renderer.update(
+            pill: transition.frame(at: 0),
+            activeIndex: 1,
+            transitionSourceIndex: 0,
+            applicationPreviewFrame: .visible,
+            applicationPreviewTracksPill: true
+        )
+
+        XCTAssertEqual(
+            try pixelBytes(of: renderer.image),
+            expandedPixels,
+            "Starting a swipe must reuse the expanded pill's exact pixels"
+        )
+
+        let restingTarget = StatusPillFrame.resting(at: target)
+        renderer.update(
+            pill: restingTarget,
+            activeIndex: 1,
+            applicationPreviewFrame: .hidden,
+            applicationPreviewTracksPill: true
+        )
+        let trackedRestingPixels = try pixelBytes(of: renderer.image)
+        renderer.setApplicationPreview(index: nil, icons: [])
+        renderer.update(
+            pill: restingTarget,
+            activeIndex: 1
+        )
+
+        XCTAssertEqual(
+            trackedRestingPixels,
+            try pixelBytes(of: renderer.image),
+            "Finishing the collapse must hand off to the normal pill exactly"
+        )
+    }
+
+    @MainActor
+    func testColorUpdateRedrawsPersistentArtworkInPlace() throws {
+        let renderer = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorColors: [.systemRed]
+        )
+        let image = renderer.image
+        renderer.update(
+            pill: .resting(at: StatusItemArtwork.centerX(for: 0)),
+            activeIndex: 0
+        )
+
+        renderer.setIndicatorColors([.systemBlue])
+        renderer.update(
+            pill: .resting(at: StatusItemArtwork.centerX(for: 0)),
+            activeIndex: 0
+        )
+
+        XCTAssertTrue(renderer.image === image)
+        let data = try XCTUnwrap(renderer.image.tiffRepresentation)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+        let center = try XCTUnwrap(
+            bitmap.colorAt(
+                x: bitmap.pixelsWide / 2,
+                y: bitmap.pixelsHigh / 2
+            )
+        )
+        XCTAssertGreaterThan(center.blueComponent, center.redComponent)
+    }
+
+    @MainActor
+    func testDarkEdgeUpdateRedrawsPersistentArtworkInPlace() throws {
+        let renderer = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorColors: [.systemBlue]
+        )
+        let image = renderer.image
+        let pill = StatusPillFrame.resting(
+            at: StatusItemArtwork.centerX(for: 0)
+        )
+        renderer.update(pill: pill, activeIndex: 0)
+        let plainPixels = try pixelBytes(of: image)
+
+        renderer.setShowsDarkEdge(true)
+        renderer.update(pill: pill, activeIndex: 0)
+        let edgedPixels = try pixelBytes(of: image)
+
+        XCTAssertTrue(renderer.image === image)
+        XCTAssertNotEqual(edgedPixels, plainPixels)
+
+        renderer.setShowsDarkEdge(false)
+        renderer.update(pill: pill, activeIndex: 0)
+        XCTAssertEqual(try pixelBytes(of: image), plainPixels)
+    }
+
+    @MainActor
+    func testPreparedApplicationIconsTrackVisualAppearanceEfficiently()
+        throws
+    {
+        func solidIcon(_ color: NSColor) -> NSImage {
+            NSImage(
+                size: NSSize(width: 32, height: 32),
+                flipped: false
+            ) { rect in
+                color.setFill()
+                NSBezierPath(rect: rect).fill()
+                return true
+            }
+        }
+
+        let appearance = try XCTUnwrap(
+            NSAppearance(named: .aqua)
+        )
+        let first = try XCTUnwrap(
+            SpaceApplicationPresentationFactory.prepareIcon(
+                solidIcon(.systemRed),
+                appearance: appearance
+            )
+        )
+        let repeated = try XCTUnwrap(
+            SpaceApplicationPresentationFactory.prepareIcon(
+                solidIcon(.systemRed),
+                appearance: appearance
+            )
+        )
+        let changed = try XCTUnwrap(
+            SpaceApplicationPresentationFactory.prepareIcon(
+                solidIcon(.systemBlue),
+                appearance: appearance
+            )
+        )
+
+        XCTAssertEqual(first.image.size, NSSize(width: 32, height: 32))
+        let bitmap = try XCTUnwrap(
+            first.image.representations.first as? NSBitmapImageRep
+        )
+        XCTAssertEqual(bitmap.pixelsWide, 64)
+        XCTAssertEqual(bitmap.pixelsHigh, 64)
+        XCTAssertEqual(first.revision, repeated.revision)
+        XCTAssertNotEqual(first.revision, changed.revision)
+    }
+
+    @MainActor
+    func testApplicationPreviewScalesProportionallyInSettingsDemo() {
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        let menuRenderer = StatusIndicatorImageRenderer(
+            count: 3,
+            sizeScale: 1,
+            imageHeight: StatusItemArtwork.imageHeight,
+            applicationPreviewIndex: 1,
+            applicationIcons: [icon, icon]
+        )
+        menuRenderer.update(
+            pill: .resting(at: StatusItemArtwork.centerX(for: 0)),
+            activeIndex: 0,
+            applicationPreviewFrame: .visible
+        )
+
+        let demoScale: CGFloat = 2.15
+        let demoRenderer = StatusIndicatorImageRenderer(
+            count: 3,
+            sizeScale: demoScale,
+            imageHeight: SyncedIndicatorArtworkView.previewHeight(
+                for: demoScale
+            ),
+            applicationPreviewIndex: 1,
+            applicationIcons: [icon, icon]
+        )
+        demoRenderer.update(
+            pill: .resting(
+                at: StatusItemArtwork.centerX(
+                    for: 0,
+                    sizeScale: demoScale
+                )
+            ),
+            activeIndex: 0,
+            applicationPreviewFrame: .visible
+        )
+
+        XCTAssertEqual(
+            demoRenderer.currentApplicationPreviewExtraWidth,
+            menuRenderer.currentApplicationPreviewExtraWidth * demoScale,
+            accuracy: 0.001
+        )
+    }
+
+    @MainActor
+    func testApplicationPreviewFitsCrowdedMenuBarProportionally() {
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        let renderer = StatusIndicatorImageRenderer(
+            count: 8,
+            applicationPreviewIndex: 3,
+            applicationIcons: Array(repeating: icon, count: 12),
+            maximumApplicationPreviewIconCount: 12,
+            maximumVisibleContentWidth:
+                StatusItemArtwork.maximumStatusItemWidth
+        )
+        renderer.update(
+            pill: .resting(at: StatusItemArtwork.centerX(for: 0)),
+            activeIndex: 0,
+            applicationPreviewFrame: .visible
+        )
+
+        XCTAssertLessThan(renderer.currentContentScale, 1)
+        XCTAssertLessThanOrEqual(
+            renderer.currentStatusItemWidth,
+            StatusItemArtwork.maximumStatusItemWidth + 0.001
+        )
+    }
+
+    @MainActor
+    func testApplicationPreviewKeepsStationaryPointerOnHoveredIndicator() throws {
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        let renderer = StatusIndicatorImageRenderer(
+            count: 3,
+            applicationPreviewIndex: 1,
+            applicationIcons: [icon, icon]
+        )
+        let initialCenter = try XCTUnwrap(renderer.indicatorCenterX(at: 1))
+
+        for expansion in stride(from: CGFloat(0), through: 1.035, by: 0.05) {
+            renderer.update(
+                pill: .resting(at: StatusItemArtwork.centerX(for: 0)),
+                activeIndex: 0,
+                applicationPreviewFrame: StatusApplicationPreviewFrame(
+                    expansion: expansion,
+                    iconOpacity: min(expansion, 1),
+                    isComplete: false
+                )
+            )
+
+            // The button expands towards its leading edge, so a stationary
+            // screen-space pointer moves right by half the added width in the
+            // renderer's fixed image coordinate system.
+            let stationaryPointerX = initialCenter
+                + renderer.currentApplicationPreviewExtraWidth / 2
+            XCTAssertEqual(
+                renderer.indicatorIndex(atImageX: stationaryPointerX),
+                1,
+                "Lost hover identity at expansion \(expansion)"
+            )
+        }
+    }
+
+    @MainActor
+    func testApplicationPreviewTimingSettlesAtSixtyAndOneTwentyHertz() {
+        for refreshRate in [60.0, 120.0] {
+            let motion = StatusApplicationPreviewMotion(
+                isPresenting: true,
+                fromFrame: .hidden,
+                startTime: 0
+            )
+            let frameCount = Int(ceil(motion.duration * refreshRate))
+            var frame = StatusApplicationPreviewFrame.hidden
+            for index in 0...frameCount {
+                frame = motion.frame(
+                    at: min(Double(index) / refreshRate, motion.duration)
+                )
+            }
+            frame = motion.frame(at: motion.duration)
+            XCTAssertEqual(frame, .visible)
+        }
     }
 
     @MainActor
@@ -994,7 +1905,7 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testThinOutlineChangesDesktopAndFullscreenIndicators() throws {
+    func testDarkEdgeChangesDesktopAndFullscreenIndicators() throws {
         let plainDesktop = StatusIndicatorImageRenderer(
             count: 1,
             indicatorColors: [.systemBlue]
@@ -1002,7 +1913,7 @@ final class SpaceViewModelTests: XCTestCase {
         let outlinedDesktop = StatusIndicatorImageRenderer(
             count: 1,
             indicatorColors: [.systemBlue],
-            showsThinOutline: true
+            showsDarkEdge: true
         )
 
         XCTAssertNotEqual(
@@ -1022,12 +1933,70 @@ final class SpaceViewModelTests: XCTestCase {
             count: 1,
             indicatorKinds: fullscreenKinds,
             indicatorColors: [.systemBlue],
-            showsThinOutline: true
+            showsDarkEdge: true
         )
 
         XCTAssertNotEqual(
             plainFullscreen.image.tiffRepresentation,
             outlinedFullscreen.image.tiffRepresentation
+        )
+    }
+
+    @MainActor
+    func testOptionalOutlineIsConsistentlyDarkForDarkIndicatorColors()
+        throws
+    {
+        let plain = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorColors: [.systemBlue]
+        )
+        let outlined = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorColors: [.systemBlue],
+            showsDarkEdge: true
+        )
+        let center = StatusItemArtwork.centerX(for: 0)
+        plain.update(
+            pill: .resting(at: center),
+            activeIndex: 0
+        )
+        outlined.update(
+            pill: .resting(at: center),
+            activeIndex: 0
+        )
+
+        let plainBitmap = try XCTUnwrap(
+            plain.image.representations.first as? NSBitmapImageRep
+        )
+        let outlinedBitmap = try XCTUnwrap(
+            outlined.image.representations.first as? NSBitmapImageRep
+        )
+        func alphaWeightedLuminance(
+            in bitmap: NSBitmapImageRep
+        ) -> CGFloat {
+            var weightedLuminance: CGFloat = 0
+            var accumulatedAlpha: CGFloat = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    guard let color = bitmap.colorAt(x: x, y: y) else {
+                        continue
+                    }
+                    let alpha = color.alphaComponent
+                    accumulatedAlpha += alpha
+                    weightedLuminance += alpha * (
+                        0.2126 * color.redComponent
+                            + 0.7152 * color.greenComponent
+                            + 0.0722 * color.blueComponent
+                    )
+                }
+            }
+            return weightedLuminance / max(accumulatedAlpha, 0.001)
+        }
+
+        XCTAssertLessThan(
+            alphaWeightedLuminance(in: outlinedBitmap),
+            alphaWeightedLuminance(in: plainBitmap),
+            "The optional edge must stay dark instead of turning white"
         )
     }
 
@@ -1041,13 +2010,13 @@ final class SpaceViewModelTests: XCTestCase {
             count: kinds.count,
             indicatorKinds: kinds,
             indicatorColors: [.systemBlue],
-            showsThinOutline: true
+            showsDarkEdge: true
         )
         let increased = StatusIndicatorImageRenderer(
             count: kinds.count,
             indicatorKinds: kinds,
             indicatorColors: [.systemBlue],
-            showsThinOutline: true,
+            showsDarkEdge: true,
             increasedContrast: true
         )
 
@@ -1152,13 +2121,19 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testFullscreenThinOutlineSurroundsColoredStroke() throws {
+    func testFullscreenDarkEdgeSurroundsColoredStroke() throws {
         let sizeScale: CGFloat = 1.7
+        let plainRenderer = StatusIndicatorImageRenderer(
+            count: 1,
+            indicatorKinds: [.fullscreen(colorIndex: 0)],
+            indicatorColors: [.systemYellow],
+            sizeScale: sizeScale
+        )
         let renderer = StatusIndicatorImageRenderer(
             count: 1,
             indicatorKinds: [.fullscreen(colorIndex: 0)],
             indicatorColors: [.systemYellow],
-            showsThinOutline: true,
+            showsDarkEdge: true,
             sizeScale: sizeScale
         )
         renderer.update(
@@ -1171,9 +2146,25 @@ final class SpaceViewModelTests: XCTestCase {
             ),
             activeIndex: 0
         )
+        plainRenderer.update(
+            pill: .resting(
+                at: StatusItemArtwork.centerX(
+                    for: 0,
+                    sizeScale: sizeScale
+                ),
+                sizeScale: sizeScale
+            ),
+            activeIndex: 0
+        )
 
         let data = try XCTUnwrap(renderer.image.tiffRepresentation)
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+        let plainData = try XCTUnwrap(
+            plainRenderer.image.tiffRepresentation
+        )
+        let plainBitmap = try XCTUnwrap(
+            NSBitmapImageRep(data: plainData)
+        )
         let centerX = bitmap.pixelsWide / 2
         let centerY = bitmap.pixelsHigh / 2
         let leftHalf = (0..<centerX).compactMap { x -> (Int, NSColor)? in
@@ -1203,6 +2194,25 @@ final class SpaceViewModelTests: XCTestCase {
         XCTAssertGreaterThan(
             try XCTUnwrap(contrastPixels.max()),
             try XCTUnwrap(coloredPixels.max())
+        )
+
+        func solidColoredPixels(in bitmap: NSBitmapImageRep) -> [Int] {
+            (0..<centerX).filter { x in
+                guard let color = bitmap.colorAt(x: x, y: centerY) else {
+                    return false
+                }
+                return color.alphaComponent > 0.8
+                    && color.redComponent > 0.8
+                    && color.greenComponent > 0.6
+                    && color.blueComponent < 0.4
+            }
+        }
+        let edgedSolidPixels = solidColoredPixels(in: bitmap)
+        let plainSolidPixels = solidColoredPixels(in: plainBitmap)
+        XCTAssertEqual(
+            edgedSolidPixels,
+            plainSolidPixels,
+            "Enabling the edge must not move the full-screen color stroke"
         )
     }
 
@@ -1306,6 +2316,19 @@ final class SpaceViewModelTests: XCTestCase {
             }
         }
         return result
+    }
+
+    private func pixelBytes(of image: NSImage) throws -> [UInt8] {
+        let bitmap = try XCTUnwrap(
+            image.representations.first as? NSBitmapImageRep
+        )
+        let data = try XCTUnwrap(bitmap.bitmapData)
+        return Array(
+            UnsafeBufferPointer(
+                start: data,
+                count: bitmap.bytesPerRow * bitmap.pixelsHigh
+            )
+        )
     }
 
     @MainActor

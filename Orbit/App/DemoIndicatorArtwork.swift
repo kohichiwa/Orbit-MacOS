@@ -14,12 +14,18 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
     let hoveredIndex: Int?
     let sizeScale: CGFloat
     let spacingScale: CGFloat
-    let showsThinOutline: Bool
+    let showsDarkEdge: Bool
     let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
     let reduceMotion: Bool
     let increasedContrast: Bool
+    let applicationPreviewIndex: Int?
+    let applicationPreviewApplications: [SpaceApplicationPresentation]
+    let isApplicationPreviewPresented: Bool
+    let onApplicationPreviewDismissed: @MainActor @Sendable () -> Void
+    let onRenderedIndicatorOffsets:
+        @MainActor @Sendable ([CGFloat]) -> Void
 
     func makeNSView(context: Context) -> SyncedIndicatorArtworkView {
         let view = SyncedIndicatorArtworkView()
@@ -49,12 +55,17 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
             hoveredIndex: hoveredIndex,
             sizeScale: sizeScale,
             spacingScale: spacingScale,
-            showsThinOutline: showsThinOutline,
+            showsDarkEdge: showsDarkEdge,
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
             reduceMotion: reduceMotion,
-            increasedContrast: increasedContrast
+            increasedContrast: increasedContrast,
+            applicationPreviewIndex: applicationPreviewIndex,
+            applicationPreviewApplications: applicationPreviewApplications,
+            isApplicationPreviewPresented: isApplicationPreviewPresented,
+            onApplicationPreviewDismissed: onApplicationPreviewDismissed,
+            onRenderedIndicatorOffsets: onRenderedIndicatorOffsets
         )
     }
 }
@@ -68,7 +79,7 @@ final class SyncedIndicatorArtworkView: NSView {
         let hoveredIndex: Int?
         let sizeScale: CGFloat
         let spacingScale: CGFloat
-        let showsThinOutline: Bool
+        let showsDarkEdge: Bool
         let shapeStyle: IndicatorShapeStyle
         let animationsEnabled: Bool
         let animationStyle: IndicatorAnimationStyle
@@ -76,7 +87,15 @@ final class SyncedIndicatorArtworkView: NSView {
         let increasedContrast: Bool
     }
 
-    private static let previewHeight: CGFloat = 45
+    private static let minimumPreviewHeight: CGFloat = 45
+
+    static func previewHeight(for sizeScale: CGFloat) -> CGFloat {
+        max(
+            minimumPreviewHeight,
+            StatusApplicationPreviewLayout.pillHeight
+                * max(sizeScale, 0.01) + 2
+        )
+    }
 
     static func horizontalOverflowPadding(
         for sizeScale: CGFloat,
@@ -104,9 +123,24 @@ final class SyncedIndicatorArtworkView: NSView {
     private var renderedPillFrame: StatusPillFrame?
     private var pillMotion: StatusPillMotion?
     private var transitionSourceIndex: Int?
+    private var interruptedTransitionPresentation:
+        StatusInterruptedTransitionPresentation?
     private var hoveredIndex: Int?
     private var hoverScales: [Int: CGSize] = [:]
     private var hoverMotions: [Int: StatusHoverMotion] = [:]
+    private var applicationPreviewIndex: Int?
+    private var applicationPreviewApplications: [
+        SpaceApplicationPresentation
+    ] = []
+    private var applicationPreviewFrame =
+        StatusApplicationPreviewFrame.hidden
+    private var applicationPreviewMotion: StatusApplicationPreviewMotion?
+    private var applicationPreviewTracksPill = false
+    private var onApplicationPreviewDismissed:
+        (@MainActor @Sendable () -> Void)?
+    private var onRenderedIndicatorOffsets:
+        (@MainActor @Sendable ([CGFloat]) -> Void)?
+    private var lastPublishedIndicatorOffsets: [CGFloat] = []
     private var artworkPresentation: StatusArtworkPresentation = .identity
     private var artworkRefreshMotion: StatusArtworkRefreshMotion?
     private var artworkRefreshDidApplySettings = false
@@ -125,6 +159,11 @@ final class SyncedIndicatorArtworkView: NSView {
     }
 
     override var isOpaque: Bool { false }
+
+    override func layout() {
+        super.layout()
+        publishRenderedIndicatorOffsets()
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -155,16 +194,33 @@ final class SyncedIndicatorArtworkView: NSView {
         hoveredIndex: Int?,
         sizeScale: CGFloat,
         spacingScale: CGFloat,
-        showsThinOutline: Bool,
+        showsDarkEdge: Bool,
         shapeStyle: IndicatorShapeStyle,
         animationsEnabled: Bool,
         animationStyle: IndicatorAnimationStyle,
         reduceMotion: Bool,
-        increasedContrast: Bool
+        increasedContrast: Bool,
+        applicationPreviewIndex: Int?,
+        applicationPreviewApplications: [SpaceApplicationPresentation],
+        isApplicationPreviewPresented: Bool,
+        onApplicationPreviewDismissed:
+            @escaping @MainActor @Sendable () -> Void,
+        onRenderedIndicatorOffsets:
+            @escaping @MainActor @Sendable ([CGFloat]) -> Void
     ) {
+        self.onApplicationPreviewDismissed =
+            onApplicationPreviewDismissed
+        self.onRenderedIndicatorOffsets = onRenderedIndicatorOffsets
         guard !indicators.isEmpty else {
             clearArtwork()
             return
+        }
+        defer {
+            updateApplicationPreview(
+                index: applicationPreviewIndex,
+                applications: applicationPreviewApplications,
+                isPresented: isApplicationPreviewPresented
+            )
         }
 
         let normalizedActiveIndex = indicators.indices.contains(activeIndex)
@@ -180,7 +236,7 @@ final class SyncedIndicatorArtworkView: NSView {
             hoveredIndex: normalizedHoveredIndex,
             sizeScale: sizeScale,
             spacingScale: spacingScale,
-            showsThinOutline: showsThinOutline,
+            showsDarkEdge: showsDarkEdge,
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
@@ -235,7 +291,7 @@ final class SyncedIndicatorArtworkView: NSView {
             hoveredIndex: newConfiguration.hoveredIndex,
             sizeScale: presentedConfiguration.sizeScale,
             spacingScale: presentedConfiguration.spacingScale,
-            showsThinOutline: newConfiguration.showsThinOutline,
+            showsDarkEdge: newConfiguration.showsDarkEdge,
             shapeStyle: presentedConfiguration.shapeStyle,
             animationsEnabled: presentedConfiguration.animationsEnabled,
             animationStyle: presentedConfiguration.animationStyle,
@@ -246,14 +302,34 @@ final class SyncedIndicatorArtworkView: NSView {
             from: presentedConfiguration,
             to: updatedPresentedConfiguration
         )
+        let colorsChanged = !colorsAreEqual(
+            presentedConfiguration.colors,
+            updatedPresentedConfiguration.colors
+        )
+        let darkEdgeChanged =
+            presentedConfiguration.showsDarkEdge
+                != updatedPresentedConfiguration.showsDarkEdge
         configuration = updatedPresentedConfiguration
 
         if artworkChanged {
-            rebuildArtwork(
-                for: updatedPresentedConfiguration,
-                previousHoveredIndex: self.hoveredIndex
-            )
+            beginArtworkRefresh(to: updatedPresentedConfiguration)
             return
+        }
+        var needsImmediateRender = false
+        if colorsChanged {
+            renderer?.setIndicatorColors(
+                updatedPresentedConfiguration.colors
+            )
+            needsImmediateRender = true
+        }
+        if darkEdgeChanged {
+            renderer?.setShowsDarkEdge(
+                updatedPresentedConfiguration.showsDarkEdge
+            )
+            needsImmediateRender = true
+        }
+        if needsImmediateRender {
+            renderArtwork()
         }
         if presentedConfiguration.activeIndex != normalizedActiveIndex {
             updateActivePill(to: normalizedActiveIndex, animated: true)
@@ -267,8 +343,12 @@ final class SyncedIndicatorArtworkView: NSView {
         animationDisplayLink?.invalidate()
         animationDisplayLink = nil
         pillMotion = nil
+        transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         hoverMotions.removeAll()
         artworkRefreshMotion = nil
+        applicationPreviewMotion = nil
+        applicationPreviewTracksPill = false
     }
 
     private func animatedConfigurationChanged(
@@ -286,7 +366,6 @@ final class SyncedIndicatorArtworkView: NSView {
     ) -> Bool {
         old.sizeScale != new.sizeScale
             || old.spacingScale != new.spacingScale
-            || old.showsThinOutline != new.showsThinOutline
             || old.reduceMotion != new.reduceMotion
             || old.increasedContrast != new.increasedContrast
     }
@@ -296,7 +375,6 @@ final class SyncedIndicatorArtworkView: NSView {
         to new: Configuration
     ) -> Bool {
         old.indicators != new.indicators
-            || !colorsAreEqual(old.colors, new.colors)
     }
 
     private func colorsAreEqual(
@@ -326,6 +404,7 @@ final class SyncedIndicatorArtworkView: NSView {
 
         pillMotion = nil
         transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         hoverMotions.removeAll()
         artworkRefreshMotion = StatusArtworkRefreshMotion(
             startTime: CACurrentMediaTime(),
@@ -353,7 +432,9 @@ final class SyncedIndicatorArtworkView: NSView {
     ) {
         pillMotion = nil
         transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         hoverMotions.removeAll()
+        applicationPreviewTracksPill = false
         hoverScales = hoverScales.filter {
             configuration.indicators.indices.contains($0.key)
         }
@@ -362,16 +443,24 @@ final class SyncedIndicatorArtworkView: NSView {
             count: configuration.indicators.count,
             indicatorKinds: configuration.indicators,
             indicatorColors: configuration.colors,
-            showsThinOutline: configuration.showsThinOutline,
+            showsDarkEdge: configuration.showsDarkEdge,
             shapeStyle: configuration.shapeStyle,
             sizeScale: configuration.sizeScale,
             spacingScale: configuration.spacingScale,
-            imageHeight: Self.previewHeight,
+            imageHeight: Self.previewHeight(
+                for: configuration.sizeScale
+            ),
             horizontalOverflowPadding: Self.horizontalOverflowPadding(
                 for: configuration.sizeScale,
                 spacingScale: configuration.spacingScale
             ),
-            increasedContrast: configuration.increasedContrast
+            increasedContrast: configuration.increasedContrast,
+            applicationPreviewIndex: applicationPreviewIndex,
+            applicationIcons: applicationPreviewApplications.map(\.icon),
+            maximumApplicationPreviewIconCount:
+                StatusApplicationPreviewLayout.maximumIconCount,
+            maximumVisibleContentWidth:
+                StatusApplicationPreviewLayout.demoMaximumContentWidth
         )
         renderedActiveIndex = configuration.activeIndex
         renderedPillFrame = configuration.activeIndex.map {
@@ -392,10 +481,167 @@ final class SyncedIndicatorArtworkView: NSView {
         updateDisplayLinkState()
     }
 
+    private func updateApplicationPreview(
+        index: Int?,
+        applications: [SpaceApplicationPresentation],
+        isPresented: Bool
+    ) {
+        let normalizedApplications = Array(
+            applications.prefix(
+                StatusApplicationPreviewLayout.maximumIconCount
+            )
+        )
+        let normalizedIndex = index.flatMap {
+            configuration?.indicators.indices.contains($0) == true
+                && !normalizedApplications.isEmpty
+                ? $0
+                : nil
+        }
+        let indexChanged = normalizedIndex != applicationPreviewIndex
+        let applicationsChanged =
+            normalizedApplications.map(\.visualIdentity)
+                != applicationPreviewApplications.map(\.visualIdentity)
+
+        if indexChanged {
+            let canContinueCurrentPreview =
+                normalizedIndex != nil
+                    && applicationPreviewIndex != nil
+                    && applicationPreviewFrame.expansion > 0.001
+            applicationPreviewMotion = nil
+            applicationPreviewTracksPill = false
+            applicationPreviewFrame = canContinueCurrentPreview
+                ? applicationPreviewFrame
+                : .hidden
+            applicationPreviewIndex = normalizedIndex
+            applicationPreviewApplications = normalizedApplications
+            renderer?.setApplicationPreview(
+                index: normalizedIndex,
+                icons: normalizedApplications.map(\.icon)
+            )
+            renderArtwork()
+        } else if applicationsChanged {
+            applicationPreviewApplications = normalizedApplications
+            renderer?.setApplicationPreview(
+                index: normalizedIndex,
+                icons: normalizedApplications.map(\.icon)
+            )
+            renderArtwork()
+        }
+
+        guard isPresented, normalizedIndex != nil else {
+            dismissApplicationPreview()
+            return
+        }
+        guard
+            applicationPreviewFrame != .visible
+                || applicationPreviewMotion != nil,
+            applicationPreviewMotion?.isPresenting != true
+        else { return }
+        startApplicationPreviewMotion(isPresenting: true)
+    }
+
+    private func dismissApplicationPreview() {
+        guard applicationPreviewIndex != nil else { return }
+        guard applicationPreviewMotion?.isPresenting != false else {
+            return
+        }
+        if applicationPreviewFrame.expansion <= 0.001 {
+            applicationPreviewFrame = .hidden
+            applicationPreviewTracksPill = false
+            applicationPreviewIndex = nil
+            applicationPreviewApplications.removeAll()
+            renderer?.setApplicationPreview(index: nil, icons: [])
+            renderArtwork()
+            notifyApplicationPreviewDismissed()
+            return
+        }
+        startApplicationPreviewMotion(isPresenting: false)
+    }
+
+    private func startApplicationPreviewMotion(isPresenting: Bool) {
+        guard let configuration else { return }
+        if isPresenting {
+            applicationPreviewTracksPill = false
+        }
+        guard OrbitMotion.allowsMotion(
+            userEnabled: configuration.animationsEnabled,
+            reduceMotion: configuration.reduceMotion
+        ) else {
+            applicationPreviewMotion = nil
+            applicationPreviewFrame = isPresenting ? .visible : .hidden
+            if !isPresenting {
+                applicationPreviewTracksPill = false
+                applicationPreviewIndex = nil
+                applicationPreviewApplications.removeAll()
+                renderer?.setApplicationPreview(index: nil, icons: [])
+                notifyApplicationPreviewDismissed()
+            }
+            renderArtwork()
+            return
+        }
+        applicationPreviewMotion = StatusApplicationPreviewMotion(
+            isPresenting: isPresenting,
+            fromFrame: applicationPreviewFrame,
+            startTime: CACurrentMediaTime()
+        )
+        configureDisplayLinkIfNeeded()
+        updateDisplayLinkState()
+    }
+
+    private func dismissApplicationPreviewImmediately() {
+        guard applicationPreviewIndex != nil else {
+            applicationPreviewTracksPill = false
+            return
+        }
+        applicationPreviewMotion = nil
+        applicationPreviewTracksPill = false
+        applicationPreviewFrame = .hidden
+        applicationPreviewIndex = nil
+        applicationPreviewApplications.removeAll()
+        renderer?.setApplicationPreview(index: nil, icons: [])
+        notifyApplicationPreviewDismissed()
+    }
+
+    private func dismissApplicationPreviewForSpaceTransition(
+        sourceActiveIndex: Int,
+        startTime: TimeInterval,
+        fullDuration: TimeInterval
+    ) {
+        guard let configuration else { return }
+        guard applicationPreviewIndex != nil else {
+            applicationPreviewTracksPill = false
+            return
+        }
+
+        applicationPreviewTracksPill =
+            applicationPreviewTracksPill
+                || applicationPreviewIndex == sourceActiveIndex
+        let allowsMotion =
+            applicationPreviewFrame.expansion > 0.001
+            && OrbitMotion.allowsMotion(
+                userEnabled: configuration.animationsEnabled,
+                reduceMotion: configuration.reduceMotion
+            )
+        guard allowsMotion else {
+            dismissApplicationPreviewImmediately()
+            return
+        }
+
+        applicationPreviewMotion = StatusApplicationPreviewMotion(
+            isPresenting: false,
+            fromFrame: applicationPreviewFrame,
+            startTime: startTime,
+            fullDuration: fullDuration
+        )
+        configureDisplayLinkIfNeeded()
+        updateDisplayLinkState()
+    }
+
     private func updateActivePill(to index: Int?, animated: Bool) {
         guard let configuration else { return }
         guard let index else {
             let previousIndex = renderedActiveIndex
+            dismissApplicationPreviewImmediately()
             stopPillMotion()
             renderedActiveIndex = nil
             renderedPillFrame = nil
@@ -408,10 +654,6 @@ final class SyncedIndicatorArtworkView: NSView {
 
         let previousIndex = renderedActiveIndex
         let targetX = indicatorCenterX(for: index)
-        renderedActiveIndex = index
-        if previousIndex != index {
-            retargetHoveredIndicator()
-        }
 
         guard
             animated,
@@ -422,6 +664,13 @@ final class SyncedIndicatorArtworkView: NSView {
                 reduceMotion: configuration.reduceMotion
             )
         else {
+            renderedActiveIndex = index
+            if previousIndex != index {
+                retargetHoveredIndicator()
+            }
+            if previousIndex != index {
+                dismissApplicationPreviewImmediately()
+            }
             stopPillMotion()
             renderedPillFrame = .resting(
                 at: targetX,
@@ -432,31 +681,82 @@ final class SyncedIndicatorArtworkView: NSView {
             return
         }
 
-        let sourceX = pillMotion == nil
+        let now = CACurrentMediaTime()
+        let existingMotion = pillMotion
+        // Retarget from the exact frame that draw(_:) has already shown.
+        // Sampling the old trajectory at event time advances it by up to one
+        // refresh interval and creates a visible skip during rapid reversals.
+        let currentFrame = renderedPillFrame
+            ?? existingMotion?.frame(at: now)
+        let shouldRetargetFromCurrentFrame =
+            existingMotion != nil
+            && !(renderedPillFrame?.isComplete == true)
+        let isReversing = existingMotion.map { motion in
+            abs(motion.fromX - targetX) < 0.6
+        } ?? false
+        let sourceX = existingMotion == nil
             ? indicatorCenterX(for: previousIndex)
-            : renderedPillFrame?.x ?? indicatorCenterX(for: previousIndex)
+            : currentFrame?.x ?? indicatorCenterX(for: previousIndex)
         let activeSize = configuration.shapeStyle.activeIndicatorSize(
             sizeScale: configuration.sizeScale
         )
-        let motion = StatusPillMotion(
-            fromX: sourceX,
-            toX: targetX,
-            initialWidth: renderedPillFrame?.width
-                ?? activeSize.width,
-            initialHeight: renderedPillFrame?.height
-                ?? activeSize.height,
-            startTime: CACurrentMediaTime(),
-            sizeScale: configuration.sizeScale,
-            itemWidth: renderedItemWidth,
-            style: configuration.animationStyle,
-            shapeStyle: configuration.shapeStyle
+
+        let interruptedPresentation: StatusInterruptedTransitionPresentation?
+        let motion: StatusPillMotion
+
+        if shouldRetargetFromCurrentFrame, let currentFrame {
+            motion = .statusBarContinuation(
+                from: currentFrame,
+                toX: targetX,
+                startTime: now,
+                sizeScale: configuration.sizeScale,
+                itemWidth: renderedItemWidth,
+                shapeStyle: configuration.shapeStyle,
+                style: configuration.animationStyle
+            )
+            interruptedPresentation = nil
+        } else {
+            interruptedPresentation = existingMotion.flatMap { _ in
+                currentFrame.flatMap {
+                    renderer?.transitionPresentationSnapshot(for: $0)
+                }
+            }
+            motion = StatusPillMotion(
+                fromX: sourceX,
+                toX: targetX,
+                initialWidth: currentFrame?.width
+                    ?? activeSize.width,
+                initialHeight: currentFrame?.height
+                    ?? activeSize.height,
+                initialWaist: currentFrame?.waist ?? 0,
+                initialAppearanceProgress:
+                    interruptedPresentation == nil && isReversing
+                    ? 1 - (currentFrame?.progress ?? 0)
+                    : 0,
+                startTime: now,
+                sizeScale: configuration.sizeScale,
+                itemWidth: renderedItemWidth,
+                style: configuration.animationStyle,
+                shapeStyle: configuration.shapeStyle,
+                isRetargeting: existingMotion != nil
+            )
+        }
+        renderedActiveIndex = index
+        dismissApplicationPreviewForSpaceTransition(
+            sourceActiveIndex: previousIndex,
+            startTime: now,
+            fullDuration: motion.duration
         )
         transitionSourceIndex = configuration.animationStyle
             .blendsIndicatorAppearanceDuringTransition
             ? previousIndex
             : nil
+        interruptedTransitionPresentation = interruptedPresentation
         pillMotion = motion
         renderedPillFrame = motion.frame(at: motion.startTime)
+        if previousIndex != index {
+            retargetHoveredIndicator()
+        }
         renderArtwork()
         configureDisplayLinkIfNeeded()
         animationDisplayLink?.isPaused = false
@@ -481,14 +781,18 @@ final class SyncedIndicatorArtworkView: NSView {
     }
 
     private func startHoverMotion(at index: Int, isHovered: Bool) {
+        let now = CACurrentMediaTime()
+        let fromScale = hoverScales[index]
+            ?? (hoverMotions[index].flatMap {
+                $0.frame(at: now).scale
+            } ?? CGSize(width: 1, height: 1))
         guard let configuration else { return }
         let motion = StatusHoverMotion(
             index: index,
-            fromScale: hoverScales[index]
-                ?? CGSize(width: 1, height: 1),
+            fromScale: fromScale,
             isHovered: isHovered,
             isActive: index == renderedActiveIndex,
-            startTime: CACurrentMediaTime(),
+            startTime: now,
             shapeStyle: configuration.shapeStyle
         )
 
@@ -508,9 +812,32 @@ final class SyncedIndicatorArtworkView: NSView {
             return
         }
 
+        if motionIsNearRest(
+            fromScale: fromScale,
+            toScale: motion.targetScale
+        ) {
+            if isHovered {
+                hoverScales[index] = motion.targetScale
+            } else {
+                hoverScales[index] = nil
+            }
+            hoverMotions[index] = nil
+            renderArtwork()
+            updateDisplayLinkState()
+            return
+        }
+
         hoverMotions[index] = motion
         configureDisplayLinkIfNeeded()
         updateDisplayLinkState()
+    }
+
+    private func motionIsNearRest(
+        fromScale: CGSize,
+        toScale: CGSize
+    ) -> Bool {
+        abs(fromScale.width - toScale.width) < 0.001
+            && abs(fromScale.height - toScale.height) < 0.001
     }
 
     private func configureDisplayLinkIfNeeded() {
@@ -556,6 +883,7 @@ final class SyncedIndicatorArtworkView: NSView {
             if frame.isComplete {
                 self.pillMotion = nil
                 transitionSourceIndex = nil
+                interruptedTransitionPresentation = nil
             }
         }
 
@@ -572,6 +900,25 @@ final class SyncedIndicatorArtworkView: NSView {
             }
         }
 
+        if let applicationPreviewMotion {
+            let frame = applicationPreviewMotion.frame(at: timestamp)
+            applicationPreviewFrame = frame
+            needsRender = true
+            if frame.isComplete {
+                self.applicationPreviewMotion = nil
+                if applicationPreviewMotion.isPresenting {
+                    applicationPreviewFrame = .visible
+                } else {
+                    applicationPreviewFrame = .hidden
+                    applicationPreviewTracksPill = false
+                    applicationPreviewIndex = nil
+                    applicationPreviewApplications.removeAll()
+                    renderer?.setApplicationPreview(index: nil, icons: [])
+                    notifyApplicationPreviewDismissed()
+                }
+            }
+        }
+
         if needsRender {
             renderArtwork()
         }
@@ -583,15 +930,40 @@ final class SyncedIndicatorArtworkView: NSView {
             pill: renderedPillFrame,
             activeIndex: renderedActiveIndex,
             transitionSourceIndex: transitionSourceIndex,
+            interruptedTransitionPresentation:
+                interruptedTransitionPresentation,
             hoverScales: hoverScales,
-            presentation: artworkPresentation
+            presentation: artworkPresentation,
+            applicationPreviewFrame: applicationPreviewFrame,
+            applicationPreviewTracksPill:
+                applicationPreviewTracksPill
         )
+        publishRenderedIndicatorOffsets()
         needsDisplay = true
+    }
+
+    private func publishRenderedIndicatorOffsets() {
+        guard
+            let renderer,
+            renderer.count > 0,
+            bounds.width > 0
+        else { return }
+        let imageOriginX = (bounds.width - renderer.imageSize.width) / 2
+        let offsets = (0..<renderer.count).compactMap { index in
+            renderer.renderedIndicatorCenterX(at: index).map {
+                imageOriginX + $0 - bounds.midX
+            }
+        }
+        guard offsets.count == renderer.count else { return }
+        guard offsets != lastPublishedIndicatorOffsets else { return }
+        lastPublishedIndicatorOffsets = offsets
+        onRenderedIndicatorOffsets?(offsets)
     }
 
     private func stopPillMotion() {
         pillMotion = nil
         transitionSourceIndex = nil
+        interruptedTransitionPresentation = nil
         updateDisplayLinkState()
     }
 
@@ -599,6 +971,7 @@ final class SyncedIndicatorArtworkView: NSView {
         animationDisplayLink?.isPaused = pillMotion == nil
             && hoverMotions.isEmpty
             && artworkRefreshMotion == nil
+            && applicationPreviewMotion == nil
     }
 
     private func indicatorCenterX(for index: Int) -> CGFloat {
@@ -627,9 +1000,20 @@ final class SyncedIndicatorArtworkView: NSView {
         renderedPillFrame = nil
         hoveredIndex = nil
         hoverScales.removeAll()
+        applicationPreviewIndex = nil
+        applicationPreviewApplications.removeAll()
+        applicationPreviewFrame = .hidden
+        applicationPreviewMotion = nil
+        applicationPreviewTracksPill = false
+        lastPublishedIndicatorOffsets.removeAll()
         artworkPresentation = .identity
         artworkRefreshDidApplySettings = false
         stopAnimations()
         needsDisplay = true
+    }
+
+    private func notifyApplicationPreviewDismissed() {
+        guard let onApplicationPreviewDismissed else { return }
+        DispatchQueue.main.async(execute: onApplicationPreviewDismissed)
     }
 }
