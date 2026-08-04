@@ -1324,7 +1324,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         if let message = viewModel.message {
             let status = NSMenuItem(title: message, action: nil, keyEquivalent: "")
-            status.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: message)
             status.isEnabled = false
             menu.addItem(status)
             menu.addItem(.separator())
@@ -1333,7 +1332,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let settingsItem = item(
             OrbitL10n.text("menu.settings", fallback: "Настройки…"),
             action: #selector(showSettings),
-            symbol: "gearshape",
             key: ","
         )
         settingsItem.keyEquivalentModifierMask = [.command]
@@ -1346,17 +1344,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                     fallback: "Завершить Orbit"
                 ),
                 action: #selector(quit),
-                symbol: "power",
                 key: "q"
             )
         )
         return menu
     }
 
-    private func item(_ title: String, action: Selector, symbol: String, key: String = "") -> NSMenuItem {
+    private func item(_ title: String, action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         return item
     }
 
