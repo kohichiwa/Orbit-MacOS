@@ -158,6 +158,7 @@ struct StatusArtworkRefreshMotion {
 struct StatusPillMotion {
     /// Largest liquid width reached by any supported transition profile.
     nonisolated static let maximumWidthFactor: CGFloat = 18
+    private static let movementDelayFraction: CGFloat = 0.045
 
     let fromX: CGFloat
     let toX: CGFloat
@@ -230,13 +231,7 @@ struct StatusPillMotion {
                 1
             )
             let durationScale = max(sqrt(remainingFraction), 0.44)
-            duration = min(
-                max(
-                    baseDuration * TimeInterval(durationScale),
-                    baseDuration
-                ),
-                baseDuration
-            )
+            duration = baseDuration * TimeInterval(durationScale)
         } else {
             duration = baseDuration
         }
@@ -359,12 +354,12 @@ struct StatusPillMotion {
         let targetRight = toX + activeSize.width / 2
         let leadingProgress = phaseProgress(
             progress,
-            from: 0,
-            to: 0.62
+            from: Self.movementDelayFraction,
+            to: 0.66
         )
         let trailingProgress = phaseProgress(
             progress,
-            from: 0.58,
+            from: 0.62,
             to: 1
         )
 
@@ -424,7 +419,11 @@ struct StatusPillMotion {
         progress: CGFloat,
         crossedSpaces: CGFloat
     ) -> StatusPillFrame {
-        let x = interpolate(fromX, toX, smootherStep(progress))
+        let x = interpolate(
+            fromX,
+            toX,
+            delayedMovementProgress(progress)
+        )
         let activeSize = shapeStyle.activeIndicatorSize(
             sizeScale: sizeScale
         )
@@ -476,7 +475,11 @@ struct StatusPillMotion {
         let settlingWidth = (shapeStyle == .circles ? 7.5 : 10.9)
             * sizeScale
         return StatusPillFrame(
-            x: interpolate(fromX, toX, classicPositionProgress(progress)),
+            x: interpolate(
+                fromX,
+                toX,
+                classicPositionProgress(delayedMovementProgress(progress))
+            ),
             width: classicValue(
                 progress: progress,
                 values: [
@@ -624,6 +627,14 @@ struct StatusPillMotion {
     private func appearanceProgress(for progress: CGFloat) -> CGFloat {
         initialAppearanceProgress
             + (1 - initialAppearanceProgress) * progress
+    }
+
+    private func delayedMovementProgress(_ progress: CGFloat) -> CGFloat {
+        phaseProgress(
+            progress,
+            from: Self.movementDelayFraction,
+            to: 1
+        )
     }
 
     /// Cubic Hermite interpolation with unit initial velocity and zero final

@@ -14,7 +14,6 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
     let hoveredIndex: Int?
     let sizeScale: CGFloat
     let spacingScale: CGFloat
-    let showsDarkEdge: Bool
     let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
@@ -55,7 +54,6 @@ struct DemoIndicatorArtwork: NSViewRepresentable {
             hoveredIndex: hoveredIndex,
             sizeScale: sizeScale,
             spacingScale: spacingScale,
-            showsDarkEdge: showsDarkEdge,
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
@@ -79,7 +77,6 @@ final class SyncedIndicatorArtworkView: NSView {
         let hoveredIndex: Int?
         let sizeScale: CGFloat
         let spacingScale: CGFloat
-        let showsDarkEdge: Bool
         let shapeStyle: IndicatorShapeStyle
         let animationsEnabled: Bool
         let animationStyle: IndicatorAnimationStyle
@@ -194,7 +191,6 @@ final class SyncedIndicatorArtworkView: NSView {
         hoveredIndex: Int?,
         sizeScale: CGFloat,
         spacingScale: CGFloat,
-        showsDarkEdge: Bool,
         shapeStyle: IndicatorShapeStyle,
         animationsEnabled: Bool,
         animationStyle: IndicatorAnimationStyle,
@@ -236,7 +232,6 @@ final class SyncedIndicatorArtworkView: NSView {
             hoveredIndex: normalizedHoveredIndex,
             sizeScale: sizeScale,
             spacingScale: spacingScale,
-            showsDarkEdge: showsDarkEdge,
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,
@@ -291,7 +286,6 @@ final class SyncedIndicatorArtworkView: NSView {
             hoveredIndex: newConfiguration.hoveredIndex,
             sizeScale: presentedConfiguration.sizeScale,
             spacingScale: presentedConfiguration.spacingScale,
-            showsDarkEdge: newConfiguration.showsDarkEdge,
             shapeStyle: presentedConfiguration.shapeStyle,
             animationsEnabled: presentedConfiguration.animationsEnabled,
             animationStyle: presentedConfiguration.animationStyle,
@@ -306,9 +300,6 @@ final class SyncedIndicatorArtworkView: NSView {
             presentedConfiguration.colors,
             updatedPresentedConfiguration.colors
         )
-        let darkEdgeChanged =
-            presentedConfiguration.showsDarkEdge
-                != updatedPresentedConfiguration.showsDarkEdge
         configuration = updatedPresentedConfiguration
 
         if artworkChanged {
@@ -319,12 +310,6 @@ final class SyncedIndicatorArtworkView: NSView {
         if colorsChanged {
             renderer?.setIndicatorColors(
                 updatedPresentedConfiguration.colors
-            )
-            needsImmediateRender = true
-        }
-        if darkEdgeChanged {
-            renderer?.setShowsDarkEdge(
-                updatedPresentedConfiguration.showsDarkEdge
             )
             needsImmediateRender = true
         }
@@ -443,7 +428,6 @@ final class SyncedIndicatorArtworkView: NSView {
             count: configuration.indicators.count,
             indicatorKinds: configuration.indicators,
             indicatorColors: configuration.colors,
-            showsDarkEdge: configuration.showsDarkEdge,
             shapeStyle: configuration.shapeStyle,
             sizeScale: configuration.sizeScale,
             spacingScale: configuration.spacingScale,

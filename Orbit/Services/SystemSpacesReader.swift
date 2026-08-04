@@ -46,6 +46,9 @@ protocol SpacesReading: AnyObject {
 /// remains a fallback when the live state cannot be decoded.
 @MainActor
 final class SystemSpacesReader: SpacesReading {
+    private static let structureCheckInterval: TimeInterval = 2
+    private static let structureCheckTolerance: TimeInterval = 0.5
+
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Orbit", category: "Spaces")
     private var observer: NSObjectProtocol?
     private var changeHandler: (() -> Void)?
@@ -83,7 +86,10 @@ final class SystemSpacesReader: SpacesReading {
         // Active-space notifications do not cover every Mission Control
         // structure change. This lightweight WindowServer check keeps
         // full-screen indicators in sync when an app enters or exits full screen.
-        let structureTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        let structureTimer = Timer(
+            timeInterval: Self.structureCheckInterval,
+            repeats: true
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard
                     let self,
@@ -92,7 +98,7 @@ final class SystemSpacesReader: SpacesReading {
                 self.checkSpaceStructure(generation: generation)
             }
         }
-        structureTimer.tolerance = 0.1
+        structureTimer.tolerance = Self.structureCheckTolerance
         RunLoop.main.add(structureTimer, forMode: .common)
         self.structureTimer = structureTimer
         checkSpaceStructure(generation: generation)

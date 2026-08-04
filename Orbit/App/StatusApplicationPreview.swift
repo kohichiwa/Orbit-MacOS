@@ -3,10 +3,10 @@ import AppKit
 enum StatusApplicationPreviewLayout {
     nonisolated static let maximumIconCount = 12
     nonisolated static let demoMaximumContentWidth: CGFloat = 484
-    nonisolated static let iconSize: CGFloat = 20
+    nonisolated static let iconSize: CGFloat = 16
     nonisolated static let iconSpacing: CGFloat = 6
-    nonisolated static let horizontalInset: CGFloat = 7.5
-    nonisolated static let verticalInset: CGFloat = 1
+    nonisolated static let horizontalInset: CGFloat = 9.5
+    nonisolated static let verticalInset: CGFloat = 3
 
     nonisolated static var pillHeight: CGFloat {
         iconSize + verticalInset * 2

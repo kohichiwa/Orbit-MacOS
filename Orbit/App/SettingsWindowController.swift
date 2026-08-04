@@ -11,15 +11,18 @@ private enum SettingsWindowMetrics {
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private static let contentSize = SettingsWindowMetrics.contentSize
     private let presentationState: SettingsPresentationState
+    private let onClose: ((SettingsWindowController) -> Void)?
 
     init(
         settings: AppSettings,
         viewModel: SpaceViewModel,
         spaceApplicationReader: any SpaceApplicationReading =
-            SystemSpaceApplicationReader()
+            SystemSpaceApplicationReader(),
+        onClose: ((SettingsWindowController) -> Void)? = nil
     ) {
         let presentationState = SettingsPresentationState()
         self.presentationState = presentationState
+        self.onClose = onClose
         let rootView = SettingsRootView(
             settings: settings,
             viewModel: viewModel,
@@ -103,6 +106,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         presentationState.isPresented = false
+        onClose?(self)
     }
 }
 
@@ -190,7 +194,6 @@ private struct SettingsLiveDemo: View {
             colors: settings.indicatorColors(for: colorSlotCount),
             sizeScale: settings.indicatorSizeScale,
             spacingScale: settings.indicatorSpacingScale,
-            showsDarkEdge: settings.showsIndicatorOutline,
             shapeStyle: settings.indicatorShapeStyle,
             animationsEnabled: settings.animateIndicator,
             animationStyle: settings.indicatorAnimationStyle,
@@ -204,7 +207,7 @@ private struct SettingsLiveDemo: View {
 private enum SettingsSurfaceMetrics {
     static let demoHeight: CGFloat = 218
     static let transparentHeight: CGFloat = 180
-    static let gradientHeight: CGFloat = 110
+    static let gradientHeight: CGFloat = 128
     static let demoSwipeBottomExtension = max(
         transparentHeight + gradientHeight - demoHeight,
         0
@@ -230,12 +233,13 @@ private struct SettingsSurfaceBackground: View {
                     LinearGradient(
                         colors: [
                             .clear,
-                            opaqueBackground.opacity(0.04),
-                            opaqueBackground.opacity(0.12),
-                            opaqueBackground.opacity(0.26),
-                            opaqueBackground.opacity(0.46),
-                            opaqueBackground.opacity(0.70),
-                            opaqueBackground.opacity(0.88),
+                            opaqueBackground.opacity(0.025),
+                            opaqueBackground.opacity(0.08),
+                            opaqueBackground.opacity(0.17),
+                            opaqueBackground.opacity(0.30),
+                            opaqueBackground.opacity(0.47),
+                            opaqueBackground.opacity(0.66),
+                            opaqueBackground.opacity(0.83),
                             opaqueBackground
                         ],
                         startPoint: .top,
@@ -295,14 +299,6 @@ private struct SettingsControls: View {
 
                     ShapeStyleRow(
                         selection: $settings.indicatorShapeStyle
-                    )
-
-                    SettingsToggleRow(
-                        title: OrbitL10n.text(
-                            "settings.outline",
-                            fallback: "Обводка"
-                        ),
-                        isOn: $settings.showsIndicatorOutline
                     )
                 }
             }
@@ -610,7 +606,6 @@ private struct AnimationStyleSelector: View {
 private struct DemoVisualConfiguration: Equatable {
     let sizeScale: Double
     let spacingScale: Double
-    let showsDarkEdge: Bool
     let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
@@ -638,7 +633,6 @@ private struct InteractiveDemoZone: View {
     let colors: [NSColor]
     let sizeScale: Double
     let spacingScale: Double
-    let showsDarkEdge: Bool
     let shapeStyle: IndicatorShapeStyle
     let animationsEnabled: Bool
     let animationStyle: IndicatorAnimationStyle
@@ -686,7 +680,6 @@ private struct InteractiveDemoZone: View {
                         hoveredIndex: artworkHoveredIndex,
                         sizeScale: demoScale,
                         spacingScale: CGFloat(configuration.spacingScale),
-                        showsDarkEdge: configuration.showsDarkEdge,
                         shapeStyle: configuration.shapeStyle,
                         animationsEnabled: configuration.animationsEnabled,
                         animationStyle: configuration.animationStyle,
@@ -961,7 +954,7 @@ private struct InteractiveDemoZone: View {
     }
 
     private var demoScale: CGFloat {
-        let requestedScale = CGFloat(configuration.sizeScale) * 2.15
+        let requestedScale = CGFloat(configuration.sizeScale) * (2.15 / 1.2)
         return StatusItemArtwork.fittedSizeScale(
             for: indicators.count,
             requestedSizeScale: requestedScale,
@@ -1079,7 +1072,6 @@ private struct InteractiveDemoZone: View {
         DemoVisualConfiguration(
             sizeScale: sizeScale,
             spacingScale: spacingScale,
-            showsDarkEdge: showsDarkEdge,
             shapeStyle: shapeStyle,
             animationsEnabled: animationsEnabled,
             animationStyle: animationStyle,

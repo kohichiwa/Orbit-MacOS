@@ -71,7 +71,6 @@ enum IndicatorShapeStyle: String, CaseIterable, Identifiable {
 enum VisualSettingsChange {
     case layout
     case colors
-    case outline
     case animationEnabled(Bool)
     case animationStyle
     case shapeStyle
@@ -88,7 +87,6 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         static let indicatorShapeStyle = "indicatorShapeStyleV2"
         static let indicatorSizeScale = "indicatorSizeScale"
         static let indicatorSpacingScale = "indicatorSpacingScale"
-        static let showsIndicatorOutline = "showsIndicatorOutline"
         static let showsApplicationsOnHover = "showsApplicationsOnHover"
         static let indicatorColorComponents = "indicatorColorComponents"
         static let indicatorColorsComponents = "indicatorColorsComponents"
@@ -153,16 +151,6 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
         }
     }
 
-    @Published var showsIndicatorOutline: Bool {
-        didSet {
-            defaults.set(
-                showsIndicatorOutline,
-                forKey: Key.showsIndicatorOutline
-            )
-            visualSettingsChanges.send(.outline)
-        }
-    }
-
     @Published var showsApplicationsOnHover: Bool {
         didSet {
             defaults.set(
@@ -213,9 +201,6 @@ final class AppSettings: ObservableObject, DesktopColorSlotAssigning {
             defaults.object(forKey: Key.indicatorSpacingScale) == nil
                 ? 1
                 : defaults.double(forKey: Key.indicatorSpacingScale)
-        )
-        showsIndicatorOutline = defaults.bool(
-            forKey: Key.showsIndicatorOutline
         )
         showsApplicationsOnHover = defaults.object(
             forKey: Key.showsApplicationsOnHover

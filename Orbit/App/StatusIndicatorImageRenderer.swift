@@ -49,7 +49,6 @@ nonisolated final class StatusIndicatorImageRenderer {
     private let bitmap: NSBitmapImageRep
     private let indicatorKinds: [SpaceIndicatorKind]
     private var indicatorColors: [NSColor]
-    private var showsDarkEdge: Bool
     private let increasedContrast: Bool
     private let shapeStyle: IndicatorShapeStyle
     private let sizeScale: CGFloat
@@ -72,7 +71,6 @@ nonisolated final class StatusIndicatorImageRenderer {
         count: Int,
         indicatorKinds: [SpaceIndicatorKind]? = nil,
         indicatorColors: [NSColor] = [.controlAccentColor],
-        showsDarkEdge: Bool = false,
         shapeStyle: IndicatorShapeStyle = .standard,
         sizeScale: CGFloat = 1,
         spacingScale: CGFloat = 1,
@@ -86,7 +84,6 @@ nonisolated final class StatusIndicatorImageRenderer {
     ) {
         let normalizedCount = max(count, 1)
         self.count = normalizedCount
-        self.showsDarkEdge = showsDarkEdge
         self.increasedContrast = increasedContrast
         self.shapeStyle = shapeStyle
         self.sizeScale = sizeScale
@@ -235,10 +232,6 @@ nonisolated final class StatusIndicatorImageRenderer {
                 ? fixedColors[colorIndex]
                 : fixedColors[0]
         }
-    }
-
-    func setShowsDarkEdge(_ isVisible: Bool) {
-        showsDarkEdge = isVisible
     }
 
     static func applicationPreviewMaximumExtraWidth(
@@ -1077,7 +1070,6 @@ nonisolated final class StatusIndicatorImageRenderer {
                 color: color,
                 strokeOpacity: initialOpacity
                     + (1 - initialOpacity) * progress,
-                edgeOpacity: indicatorEdgeOpacity,
                 lineWidth: initialLineWidth
                     + (activeLineWidth - initialLineWidth) * progress,
                 isFullscreen: true
@@ -1090,8 +1082,7 @@ nonisolated final class StatusIndicatorImageRenderer {
             in: rect,
             color: color,
             fillOpacity: initialOpacity
-                + (1 - initialOpacity) * progress,
-            edgeOpacity: indicatorEdgeOpacity
+                + (1 - initialOpacity) * progress
         )
     }
 
@@ -1119,7 +1110,6 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 strokeOpacity: inactiveFullscreenOpacity * opacity,
-                edgeOpacity: indicatorEdgeOpacity * opacity,
                 lineWidth: fullscreenOutlineWidth
                     * (increasedContrast ? 1.12 : 1),
                 isFullscreen: true
@@ -1128,8 +1118,7 @@ nonisolated final class StatusIndicatorImageRenderer {
             drawFilledIndicator(
                 in: rect,
                 color: color,
-                fillOpacity: inactiveDesktopOpacity * opacity,
-                edgeOpacity: indicatorEdgeOpacity * opacity
+                fillOpacity: inactiveDesktopOpacity * opacity
             )
         }
     }
@@ -1243,7 +1232,6 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 strokeOpacity: opacity,
-                edgeOpacity: indicatorEdgeOpacity * opacity,
                 lineWidth: fullscreenOutlineWidth
                     * (increasedContrast ? 1.68 : 1.5),
                 waist: waist,
@@ -1254,7 +1242,6 @@ nonisolated final class StatusIndicatorImageRenderer {
                 in: rect,
                 color: color,
                 fillOpacity: opacity,
-                edgeOpacity: indicatorEdgeOpacity * opacity,
                 waist: waist
             )
         }
@@ -1264,7 +1251,6 @@ nonisolated final class StatusIndicatorImageRenderer {
         in rect: NSRect,
         color: NSColor,
         strokeOpacity: CGFloat,
-        edgeOpacity: CGFloat,
         lineWidth: CGFloat,
         waist: CGFloat = 0,
         isFullscreen: Bool = false
@@ -1273,58 +1259,19 @@ nonisolated final class StatusIndicatorImageRenderer {
             in: rect,
             color: color.withAlphaComponent(strokeOpacity),
             lineWidth: lineWidth,
-            waist: waist
-                ,isFullscreen: isFullscreen
+            waist: waist,
+            isFullscreen: isFullscreen
         )
-        if showsDarkEdge && edgeOpacity > 0.001 {
-            let outlineColor = thinOutlineColor(
-                for: color,
-                opacity: edgeOpacity
-            )
-            drawOutline(
-                in: rect,
-                color: outlineColor,
-                lineWidth: indicatorEdgeWidth,
-                waist: waist,
-                isFullscreen: isFullscreen
-            )
-        }
     }
 
     private func drawFilledIndicator(
         in rect: NSRect,
         color: NSColor,
         fillOpacity: CGFloat,
-        edgeOpacity: CGFloat,
         waist: CGFloat = 0
     ) {
         color.withAlphaComponent(fillOpacity).setFill()
         indicatorPath(in: rect, waist: waist).fill()
-
-        guard showsDarkEdge else { return }
-        drawOutline(
-            in: rect,
-            color: thinOutlineColor(
-                for: color,
-                opacity: edgeOpacity
-            ),
-            lineWidth: indicatorEdgeWidth,
-            waist: waist
-        )
-    }
-
-    private func thinOutlineColor(
-        for color: NSColor,
-        opacity: CGFloat
-    ) -> NSColor {
-        let color = Self.fixedSRGBColor(from: color)
-        let luminance = 0.2126 * color.redComponent
-            + 0.7152 * color.greenComponent
-            + 0.0722 * color.blueComponent
-        return NSColor(
-            white: luminance > 0.58 ? 0 : 1,
-            alpha: opacity
-        )
     }
 
     private func transitionState(
@@ -1604,15 +1551,8 @@ nonisolated final class StatusIndicatorImageRenderer {
         increasedContrast ? 0.72 : 0.46
     }
 
-    private var indicatorEdgeOpacity: CGFloat {
-        increasedContrast ? 0.48 : 0.25
-    }
-
     private var fullscreenOutlineWidth: CGFloat {
-        max(1.1 * sizeScale, 1)
+        max(1.0 * sizeScale, 1)
     }
 
-    private var indicatorEdgeWidth: CGFloat {
-        max(0.35 * sizeScale, 0.35)
-    }
 }

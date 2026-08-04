@@ -117,6 +117,34 @@ final class AppSettingsTests: XCTestCase {
         controller.stop()
     }
 
+    func testSettingsWindowReportsClosureForOwnerRelease() async {
+        let suiteName = "OrbitTests.settings.release.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = AppSettings(defaults: defaults)
+        let viewModel = SpaceViewModel(
+            colorAssignments: settings,
+            previewSnapshot: SpaceSnapshot(
+                identifiers: [11, 12, 13],
+                activeIndex: 1
+            )
+        )
+        let didClose = expectation(description: "Settings window closed")
+        let controller = SettingsWindowController(
+            settings: settings,
+            viewModel: viewModel,
+            onClose: { _ in didClose.fulfill() }
+        )
+
+        controller.show()
+        controller.window?.close()
+
+        await fulfillment(of: [didClose], timeout: 1)
+    }
+
     func testEnglishAndRussianCatalogsContainTheSameLocalizedKeys() throws {
         let requiredKeys: Set<String> = [
             "menu.settings",
@@ -150,7 +178,6 @@ final class AppSettingsTests: XCTestCase {
                 ) as? [String: String]
             )
             XCTAssertTrue(requiredKeys.isSubset(of: Set(strings.keys)))
-            XCTAssertGreaterThanOrEqual(strings.count, 63)
             XCTAssertTrue(strings.values.allSatisfy { !$0.isEmpty })
             keysByLanguage[language] = Set(strings.keys)
         }
@@ -199,16 +226,6 @@ final class AppSettingsTests: XCTestCase {
             let restored = AppSettings(defaults: defaults)
             XCTAssertEqual(restored.indicatorShapeStyle, .circles)
             XCTAssertEqual(IndicatorShapeStyle.allCases.count, 3)
-        }
-    }
-
-    func testOutlineDefaultsOffAndPersists() {
-        withSettings { settings, defaults in
-            XCTAssertFalse(settings.showsIndicatorOutline)
-
-            settings.showsIndicatorOutline = true
-
-            XCTAssertTrue(AppSettings(defaults: defaults).showsIndicatorOutline)
         }
     }
 
@@ -287,7 +304,7 @@ final class AppSettingsTests: XCTestCase {
         )
         XCTAssertEqual(
             OrbitMotion.applicationPreviewHoverDelay,
-            0.13,
+            0.16,
             accuracy: 0.001
         )
         XCTAssertGreaterThan(
@@ -321,7 +338,6 @@ final class AppSettingsTests: XCTestCase {
                 animationsEnabled: Bool,
                 style: IndicatorAnimationStyle,
                 shape: IndicatorShapeStyle,
-                outlineEnabled: Bool,
                 applicationsOnHover: Bool,
                 colorCount: Int
             )] = []
@@ -333,7 +349,6 @@ final class AppSettingsTests: XCTestCase {
                     settings.animateIndicator,
                     settings.indicatorAnimationStyle,
                     settings.indicatorShapeStyle,
-                    settings.showsIndicatorOutline,
                     settings.showsApplicationsOnHover,
                     settings.indicatorColors.count
                 ))
@@ -345,18 +360,16 @@ final class AppSettingsTests: XCTestCase {
             settings.animateIndicator = false
             settings.indicatorAnimationStyle = .classic
             settings.indicatorShapeStyle = .roundedRectangles
-            settings.showsIndicatorOutline = true
             settings.showsApplicationsOnHover = true
 
-            XCTAssertEqual(snapshots.count, 8)
+            XCTAssertEqual(snapshots.count, 7)
             XCTAssertEqual(snapshots[0].size, 1.2)
             XCTAssertEqual(snapshots[1].spacing, 1.25)
             XCTAssertEqual(snapshots[2].colorCount, 1)
             XCTAssertFalse(snapshots[3].animationsEnabled)
             XCTAssertEqual(snapshots[4].style, .classic)
             XCTAssertEqual(snapshots[5].shape, .roundedRectangles)
-            XCTAssertTrue(snapshots[6].outlineEnabled)
-            XCTAssertTrue(snapshots[7].applicationsOnHover)
+            XCTAssertTrue(snapshots[6].applicationsOnHover)
             withExtendedLifetime(cancellable) {}
         }
     }

@@ -8,9 +8,7 @@ struct StatusItemView: View {
         SpaceDotsView(
             count: viewModel.spaceCount,
             activeIndex: viewModel.activeIndex
-        ) { index in
-            Task { await viewModel.select(index) }
-        }
+        ) { _ in }
         .padding(.horizontal, 4)
         .frame(height: 22)
         .accessibilityElement(children: .contain)

@@ -62,7 +62,6 @@ final class SystemSpacesReaderTests: XCTestCase {
         )
         XCTAssertEqual(snapshot?.count, 3)
         XCTAssertEqual(snapshot?.activeIndex, 2)
-        XCTAssertEqual(snapshot?.direction(toward: 10), .previous)
     }
 
     func testInvalidConfigurationReturnsNil() {
@@ -99,39 +98,6 @@ final class SystemSpacesReaderTests: XCTestCase {
 
 final class SpaceViewModelTests: XCTestCase {
     @MainActor
-    func testClickedDesktopIsSelectedThroughEveryIntermediateSpace() async {
-        let initial = SpaceSnapshot(
-            orderedIdentifiers: [10, 20, 30],
-            desktopIdentifiers: [10, 30],
-            activeIdentifier: 10
-        )
-        let fullscreen = SpaceSnapshot(
-            orderedIdentifiers: [10, 20, 30],
-            desktopIdentifiers: [10, 30],
-            activeIdentifier: 20
-        )
-        let target = SpaceSnapshot(
-            orderedIdentifiers: [10, 20, 30],
-            desktopIdentifiers: [10, 30],
-            activeIdentifier: 30
-        )
-        let reader = FakeSpacesReader(snapshots: [initial, fullscreen, target])
-        let controller = FakeSpaceController(canPostEvents: true)
-        let viewModel = SpaceViewModel(
-            reader: reader,
-            controller: controller,
-            previewSnapshot: initial
-        )
-
-        await viewModel.select(2)
-
-        XCTAssertEqual(viewModel.spaceCount, 3)
-        XCTAssertEqual(viewModel.activeIndex, 2)
-        XCTAssertEqual(controller.moves, [.next, .next])
-        XCTAssertNil(viewModel.message)
-    }
-
-    @MainActor
     func testNewFullscreenSpaceRetainsItsSourceDesktopColor() async {
         let initial = SpaceSnapshot(identifiers: [10, 20], activeIndex: 1)
         let fullscreen = SpaceSnapshot(
@@ -146,7 +112,6 @@ final class SpaceViewModelTests: XCTestCase {
         )
         let viewModel = SpaceViewModel(
             reader: FakeSpacesReader(snapshots: [fullscreen]),
-            controller: FakeSpaceController(canPostEvents: true),
             previewSnapshot: initial
         )
 
@@ -164,52 +129,12 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDotClickNeverRequestsPermissionAutomatically() async {
-        let initial = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 0)
-        let reader = FakeSpacesReader(snapshots: [initial])
-        let controller = FakeSpaceController(canPostEvents: false)
-        let viewModel = SpaceViewModel(
-            reader: reader,
-            controller: controller,
-            previewSnapshot: initial
-        )
-
-        await viewModel.select(2)
-
-        XCTAssertEqual(viewModel.activeIndex, 0)
-        XCTAssertTrue(controller.moves.isEmpty)
-        XCTAssertEqual(controller.permissionRequestCount, 0)
-        XCTAssertNotNil(viewModel.message)
-    }
-
-    @MainActor
-    func testDotSelectionIsOptimisticWhileSystemSwitches() async {
-        let initial = SpaceSnapshot(identifiers: [1, 2], activeIndex: 0)
-        let target = SpaceSnapshot(identifiers: [1, 2], activeIndex: 1)
-        let reader = PausingSpacesReader(initial: initial, target: target)
-        let controller = FakeSpaceController(canPostEvents: true)
-        let viewModel = SpaceViewModel(
-            reader: reader,
-            controller: controller,
-            previewSnapshot: initial
-        )
-
-        let selection = Task { await viewModel.select(1) }
-        await Task.yield()
-        XCTAssertEqual(viewModel.activeIndex, 1)
-        reader.allowChange()
-        await selection.value
-        XCTAssertEqual(viewModel.activeIndex, 1)
-    }
-
-    @MainActor
     func testExternalSpaceChangeUpdatesActiveDot() async throws {
         let initial = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 0)
         let target = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 2)
         let reader = EventSpacesReader(snapshot: initial)
         let viewModel = SpaceViewModel(
             reader: reader,
-            controller: FakeSpaceController(canPostEvents: true),
             previewSnapshot: initial
         )
 
@@ -234,7 +159,6 @@ final class SpaceViewModelTests: XCTestCase {
         let reader = ControlledSpacesReader()
         let viewModel = SpaceViewModel(
             reader: reader,
-            controller: FakeSpaceController(canPostEvents: true),
             previewSnapshot: initial
         )
 
@@ -272,7 +196,6 @@ final class SpaceViewModelTests: XCTestCase {
         let settings = AppSettings(defaults: defaults)
         let snapshot = SpaceSnapshot(identifiers: [1, 2, 3], activeIndex: 1)
         let viewModel = SpaceViewModel(
-            controller: FakeSpaceController(canPostEvents: true),
             previewSnapshot: snapshot
         )
         var controller: StatusBarController? = StatusBarController(
@@ -300,7 +223,6 @@ final class SpaceViewModelTests: XCTestCase {
         let reader = EventSpacesReader(snapshot: initial)
         let viewModel = SpaceViewModel(
             reader: reader,
-            controller: FakeSpaceController(canPostEvents: true),
             previewSnapshot: initial
         )
 
@@ -813,7 +735,8 @@ final class SpaceViewModelTests: XCTestCase {
             startTime: startTime,
             sizeScale: 1,
             itemWidth: StatusItemArtwork.itemWidth,
-            shapeStyle: .standard
+            shapeStyle: .standard,
+            style: .classic
         )
 
         XCTAssertTrue(continuation.isRetargeting)
@@ -863,7 +786,8 @@ final class SpaceViewModelTests: XCTestCase {
             startTime: startTime,
             sizeScale: 1,
             itemWidth: StatusItemArtwork.itemWidth,
-            shapeStyle: .standard
+            shapeStyle: .standard,
+            style: .classic
         )
 
         XCTAssertLessThan(
@@ -1531,31 +1455,6 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDarkEdgeUpdateRedrawsPersistentArtworkInPlace() throws {
-        let renderer = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorColors: [.systemBlue]
-        )
-        let image = renderer.image
-        let pill = StatusPillFrame.resting(
-            at: StatusItemArtwork.centerX(for: 0)
-        )
-        renderer.update(pill: pill, activeIndex: 0)
-        let plainPixels = try pixelBytes(of: image)
-
-        renderer.setShowsDarkEdge(true)
-        renderer.update(pill: pill, activeIndex: 0)
-        let edgedPixels = try pixelBytes(of: image)
-
-        XCTAssertTrue(renderer.image === image)
-        XCTAssertNotEqual(edgedPixels, plainPixels)
-
-        renderer.setShowsDarkEdge(false)
-        renderer.update(pill: pill, activeIndex: 0)
-        XCTAssertEqual(try pixelBytes(of: image), plainPixels)
-    }
-
-    @MainActor
     func testPreparedApplicationIconsTrackVisualAppearanceEfficiently()
         throws
     {
@@ -1905,102 +1804,6 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDarkEdgeChangesDesktopAndFullscreenIndicators() throws {
-        let plainDesktop = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorColors: [.systemBlue]
-        )
-        let outlinedDesktop = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorColors: [.systemBlue],
-            showsDarkEdge: true
-        )
-
-        XCTAssertNotEqual(
-            plainDesktop.image.tiffRepresentation,
-            outlinedDesktop.image.tiffRepresentation
-        )
-
-        let fullscreenKinds: [SpaceIndicatorKind] = [
-            .fullscreen(colorIndex: 0)
-        ]
-        let plainFullscreen = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorKinds: fullscreenKinds,
-            indicatorColors: [.systemBlue]
-        )
-        let outlinedFullscreen = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorKinds: fullscreenKinds,
-            indicatorColors: [.systemBlue],
-            showsDarkEdge: true
-        )
-
-        XCTAssertNotEqual(
-            plainFullscreen.image.tiffRepresentation,
-            outlinedFullscreen.image.tiffRepresentation
-        )
-    }
-
-    @MainActor
-    func testOptionalOutlineIsConsistentlyDarkForDarkIndicatorColors()
-        throws
-    {
-        let plain = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorColors: [.systemBlue]
-        )
-        let outlined = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorColors: [.systemBlue],
-            showsDarkEdge: true
-        )
-        let center = StatusItemArtwork.centerX(for: 0)
-        plain.update(
-            pill: .resting(at: center),
-            activeIndex: 0
-        )
-        outlined.update(
-            pill: .resting(at: center),
-            activeIndex: 0
-        )
-
-        let plainBitmap = try XCTUnwrap(
-            plain.image.representations.first as? NSBitmapImageRep
-        )
-        let outlinedBitmap = try XCTUnwrap(
-            outlined.image.representations.first as? NSBitmapImageRep
-        )
-        func alphaWeightedLuminance(
-            in bitmap: NSBitmapImageRep
-        ) -> CGFloat {
-            var weightedLuminance: CGFloat = 0
-            var accumulatedAlpha: CGFloat = 0
-            for y in 0..<bitmap.pixelsHigh {
-                for x in 0..<bitmap.pixelsWide {
-                    guard let color = bitmap.colorAt(x: x, y: y) else {
-                        continue
-                    }
-                    let alpha = color.alphaComponent
-                    accumulatedAlpha += alpha
-                    weightedLuminance += alpha * (
-                        0.2126 * color.redComponent
-                            + 0.7152 * color.greenComponent
-                            + 0.0722 * color.blueComponent
-                    )
-                }
-            }
-            return weightedLuminance / max(accumulatedAlpha, 0.001)
-        }
-
-        XCTAssertLessThan(
-            alphaWeightedLuminance(in: outlinedBitmap),
-            alphaWeightedLuminance(in: plainBitmap),
-            "The optional edge must stay dark instead of turning white"
-        )
-    }
-
-    @MainActor
     func testIncreasedContrastStrengthensIndicatorsWithoutChangingGeometry() throws {
         let kinds: [SpaceIndicatorKind] = [
             .desktop(colorIndex: 0),
@@ -2009,14 +1812,12 @@ final class SpaceViewModelTests: XCTestCase {
         let normal = StatusIndicatorImageRenderer(
             count: kinds.count,
             indicatorKinds: kinds,
-            indicatorColors: [.systemBlue],
-            showsDarkEdge: true
+            indicatorColors: [.systemBlue]
         )
         let increased = StatusIndicatorImageRenderer(
             count: kinds.count,
             indicatorKinds: kinds,
             indicatorColors: [.systemBlue],
-            showsDarkEdge: true,
             increasedContrast: true
         )
 
@@ -2117,102 +1918,6 @@ final class SpaceViewModelTests: XCTestCase {
         XCTAssertEqual(
             circleHover.targetScale.width,
             circleHover.targetScale.height
-        )
-    }
-
-    @MainActor
-    func testFullscreenDarkEdgeSurroundsColoredStroke() throws {
-        let sizeScale: CGFloat = 1.7
-        let plainRenderer = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorKinds: [.fullscreen(colorIndex: 0)],
-            indicatorColors: [.systemYellow],
-            sizeScale: sizeScale
-        )
-        let renderer = StatusIndicatorImageRenderer(
-            count: 1,
-            indicatorKinds: [.fullscreen(colorIndex: 0)],
-            indicatorColors: [.systemYellow],
-            showsDarkEdge: true,
-            sizeScale: sizeScale
-        )
-        renderer.update(
-            pill: .resting(
-                at: StatusItemArtwork.centerX(
-                    for: 0,
-                    sizeScale: sizeScale
-                ),
-                sizeScale: sizeScale
-            ),
-            activeIndex: 0
-        )
-        plainRenderer.update(
-            pill: .resting(
-                at: StatusItemArtwork.centerX(
-                    for: 0,
-                    sizeScale: sizeScale
-                ),
-                sizeScale: sizeScale
-            ),
-            activeIndex: 0
-        )
-
-        let data = try XCTUnwrap(renderer.image.tiffRepresentation)
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
-        let plainData = try XCTUnwrap(
-            plainRenderer.image.tiffRepresentation
-        )
-        let plainBitmap = try XCTUnwrap(
-            NSBitmapImageRep(data: plainData)
-        )
-        let centerX = bitmap.pixelsWide / 2
-        let centerY = bitmap.pixelsHigh / 2
-        let leftHalf = (0..<centerX).compactMap { x -> (Int, NSColor)? in
-            guard let color = bitmap.colorAt(x: x, y: centerY) else {
-                return nil
-            }
-            return (x, color)
-        }
-        let contrastPixels = leftHalf.filter { _, color in
-            color.alphaComponent > 0.04
-                && color.redComponent < 0.35
-                && color.greenComponent < 0.35
-                && color.blueComponent < 0.35
-        }.map(\.0)
-        let coloredPixels = leftHalf.filter { _, color in
-            color.alphaComponent > 0.2
-                && color.redComponent > 0.65
-                && color.greenComponent > 0.45
-        }.map(\.0)
-
-        XCTAssertFalse(contrastPixels.isEmpty)
-        XCTAssertFalse(coloredPixels.isEmpty)
-        XCTAssertLessThan(
-            try XCTUnwrap(contrastPixels.min()),
-            try XCTUnwrap(coloredPixels.min())
-        )
-        XCTAssertGreaterThan(
-            try XCTUnwrap(contrastPixels.max()),
-            try XCTUnwrap(coloredPixels.max())
-        )
-
-        func solidColoredPixels(in bitmap: NSBitmapImageRep) -> [Int] {
-            (0..<centerX).filter { x in
-                guard let color = bitmap.colorAt(x: x, y: centerY) else {
-                    return false
-                }
-                return color.alphaComponent > 0.8
-                    && color.redComponent > 0.8
-                    && color.greenComponent > 0.6
-                    && color.blueComponent < 0.4
-            }
-        }
-        let edgedSolidPixels = solidColoredPixels(in: bitmap)
-        let plainSolidPixels = solidColoredPixels(in: plainBitmap)
-        XCTAssertEqual(
-            edgedSolidPixels,
-            plainSolidPixels,
-            "Enabling the edge must not move the full-screen color stroke"
         )
     }
 
@@ -2344,8 +2049,7 @@ final class SpaceViewModelTests: XCTestCase {
     @MainActor
     private func renderStatusItem(appearance: NSAppearance.Name, filename: String) throws {
         let snapshot = SpaceSnapshot(identifiers: [1, 2, 3, 4], activeIndex: 1)
-        let controller = FakeSpaceController(canPostEvents: true)
-        let viewModel = SpaceViewModel(controller: controller, previewSnapshot: snapshot)
+        let viewModel = SpaceViewModel(previewSnapshot: snapshot)
         let root = StatusItemView(viewModel: viewModel)
             .frame(width: StatusItemView.preferredWidth(for: snapshot.count), height: 22)
         let hostingView = NSHostingView(rootView: root)
@@ -2379,23 +2083,6 @@ private final class FakeSpacesReader: SpacesReading {
         if snapshots.count == 1 { return snapshots[0] }
         return snapshots.removeFirst()
     }
-}
-
-@MainActor
-private final class PausingSpacesReader: SpacesReading {
-    private let initial: SpaceSnapshot
-    private let target: SpaceSnapshot
-    private var changeAllowed = false
-
-    init(initial: SpaceSnapshot, target: SpaceSnapshot) {
-        self.initial = initial
-        self.target = target
-    }
-
-    func start(onChange: @escaping () -> Void) {}
-    func stop() {}
-    func allowChange() { changeAllowed = true }
-    func read() async -> SpaceSnapshot? { changeAllowed ? target : initial }
 }
 
 @MainActor
@@ -2439,25 +2126,5 @@ private final class ControlledSpacesReader: SpacesReading {
         continuations.removeValue(forKey: identifier)?.resume(
             returning: snapshot
         )
-    }
-}
-
-@MainActor
-private final class FakeSpaceController: SpaceControlling {
-    let canPostEvents: Bool
-    private(set) var moves: [SpaceDirection] = []
-    private(set) var permissionRequestCount = 0
-
-    init(canPostEvents: Bool) {
-        self.canPostEvents = canPostEvents
-    }
-
-    func requestAccessibilityPermission() -> Bool {
-        permissionRequestCount += 1
-        return canPostEvents
-    }
-
-    func move(_ direction: SpaceDirection) async throws {
-        moves.append(direction)
     }
 }

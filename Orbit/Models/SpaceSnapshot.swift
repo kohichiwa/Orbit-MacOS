@@ -82,14 +82,4 @@ struct SpaceSnapshot: Equatable, Sendable {
             activeIdentifier = nil
         }
     }
-
-    func direction(toward targetIdentifier: Int64) -> SpaceDirection? {
-        guard
-            let activeIdentifier,
-            let current = orderedIdentifiers.firstIndex(of: activeIdentifier),
-            let target = orderedIdentifiers.firstIndex(of: targetIdentifier),
-            current != target
-        else { return nil }
-        return target < current ? .previous : .next
-    }
 }

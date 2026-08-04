@@ -18,8 +18,7 @@ OrbitApp
 └─ AppDelegate
    ├─ AppSettings
    ├─ SpaceViewModel
-   │  ├─ SystemSpacesReader
-   │  └─ SystemSpaceController
+   │  └─ SystemSpacesReader
    └─ StatusBarController
       ├─ NSStatusItem + bitmap renderer
       ├─ paused-when-idle CADisplayLink
@@ -38,8 +37,8 @@ OrbitApp
 ## Поток Spaces
 
 1. `NSWorkspace.activeSpaceDidChangeNotification` сообщает активную смену.
-2. Полусекундный single-flight watchdog замечает изменения структуры Mission
-   Control, включая появление и исчезновение fullscreen Spaces.
+2. Редкий single-flight watchdog страхует изменения структуры Mission Control,
+   включая появление и исчезновение fullscreen Spaces, которые не дали уведомление.
 3. `SpaceViewModel` отвергает transient snapshot без Current Space и устаревшие
    результаты отменённых refresh-запросов.
 4. `StatusBarController` получает только изменившиеся published-значения и запускает
@@ -81,7 +80,7 @@ macOS 27-only не используются. Поддержка новой macOS
 3. Проверить light/dark, Reduce Motion/Transparency, Increase Contrast и обе
    локализации.
 4. Проверить 1, 2, 6, 12+ Spaces, fullscreen и multiple displays.
-5. Проверить fresh/allowed/denied состояния Accessibility и Automation.
+5. Проверить переключение Spaces и анимации без дополнительных системных разрешений.
 6. Снять idle Activity Monitor/Time Profiler trace и убедиться, что display links
    paused, а Settings preview отсутствует после закрытия окна.
 7. Для распространения отдельно выполнить Developer ID signing и notarization.

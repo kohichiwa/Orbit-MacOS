@@ -261,8 +261,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 switch change {
                 case .colors:
                     refreshIndicatorColors()
-                case .outline:
-                    refreshIndicatorEdge()
                 case .layout:
                     applyPendingVisualSettings()
                 case .animationEnabled(let enabled):
@@ -320,14 +318,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             settings.indicatorColors(
                 for: renderedDesktopColorSlotCount
             )
-        )
-        renderArtwork()
-    }
-
-    private func refreshIndicatorEdge() {
-        guard let artworkRenderer else { return }
-        artworkRenderer.setShowsDarkEdge(
-            settings.showsIndicatorOutline
         )
         renderArtwork()
     }
@@ -444,7 +434,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             indicatorColors: settings.indicatorColors(
                 for: renderedDesktopColorSlotCount
             ),
-            showsDarkEdge: settings.showsIndicatorOutline,
             shapeStyle: presentedShapeStyle,
             sizeScale: indicatorSizeScale,
             spacingScale: indicatorSpacingScale,
@@ -1349,18 +1338,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         )
         settingsItem.keyEquivalentModifierMask = [.command]
         menu.addItem(settingsItem)
-        if !viewModel.canPostEvents {
-            menu.addItem(
-                item(
-                    OrbitL10n.text(
-                        "menu.allowControl",
-                        fallback: "Разрешить управление…"
-                    ),
-                    action: #selector(requestAccess),
-                    symbol: "hand.raised"
-                )
-            )
-        }
         menu.addItem(.separator())
         menu.addItem(
             item(
@@ -1383,10 +1360,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return item
     }
 
-    @objc private func requestAccess() {
-        _ = viewModel.requestEventPostingAccess()
-    }
-
     @objc func showSettings() {
         let settingsWindowController: SettingsWindowController
         if let existingController = self.settingsWindowController {
@@ -1395,7 +1368,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let newController = SettingsWindowController(
                 settings: settings,
                 viewModel: viewModel,
-                spaceApplicationReader: spaceApplicationReader
+                spaceApplicationReader: spaceApplicationReader,
+                onClose: { [weak self] controller in
+                    guard self?.settingsWindowController === controller else {
+                        return
+                    }
+                    self?.settingsWindowController = nil
+                }
             )
             self.settingsWindowController = newController
             settingsWindowController = newController
