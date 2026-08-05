@@ -51,6 +51,16 @@ zip-архивы по EdDSA-ключу Sparkle.
 ORBIT_SPARKLE_PUBLIC_ED_KEY="<public key>" Scripts/release-github-sparkle.sh 1.0.1
 ```
 
+Для non-interactive релиза можно временно экспортировать private key и передать
+его в `generate_appcast` через скрипт:
+
+```bash
+/path/to/Sparkle/bin/generate_keys -x /tmp/orbit_sparkle_private_key.txt
+ORBIT_SPARKLE_PUBLIC_ED_KEY="<public key>" \
+ORBIT_SPARKLE_PRIVATE_ED_KEY_FILE="/tmp/orbit_sparkle_private_key.txt" \
+Scripts/release-github-sparkle.sh 1.0.1
+```
+
 Скрипт собирает `Orbit.app`, создает `Orbit-<version>.zip`, генерирует
 `appcast.xml` и загружает оба файла в GitHub Release.
 

@@ -24,6 +24,16 @@ Orbit uses Sparkle for app updates and GitHub Releases as the update host.
 
    The private key stays in your login Keychain. Keep it backed up.
 
+   For non-interactive releases, export the private key temporarily and pass it
+   to the release script:
+
+   ```bash
+   /path/to/Sparkle/bin/generate_keys -x /tmp/orbit_sparkle_private_key.txt
+   ORBIT_SPARKLE_PUBLIC_ED_KEY="<public key>" \
+   ORBIT_SPARKLE_PRIVATE_ED_KEY_FILE="/tmp/orbit_sparkle_private_key.txt" \
+   Scripts/release-github-sparkle.sh 1.0.1
+   ```
+
 ## Release
 
 The script builds `Orbit.app`, creates `Orbit-<version>.zip`, generates
