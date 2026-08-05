@@ -18,7 +18,7 @@ UPDATES_DIR="$RELEASE_DIR/updates"
 ARCHIVE_NAME="$APP_NAME-$VERSION.zip"
 ARCHIVE_PATH="$UPDATES_DIR/$ARCHIVE_NAME"
 APPCAST_URL="https://github.com/$REPO_SLUG/releases/latest/download/appcast.xml"
-DOWNLOAD_URL_PREFIX="https://github.com/$REPO_SLUG/releases/download/v$VERSION"
+DOWNLOAD_URL_PREFIX="https://github.com/$REPO_SLUG/releases/download/v$VERSION/"
 
 if [[ -z "${ORBIT_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
   echo "ORBIT_SPARKLE_PUBLIC_ED_KEY is required."
