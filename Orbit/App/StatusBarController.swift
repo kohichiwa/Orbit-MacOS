@@ -867,10 +867,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             startHoverMotion(at: previousIndex, isHovered: false)
         }
         if let normalizedIndex {
+            startHoverMotion(at: normalizedIndex, isHovered: true)
             if settings.showsApplicationsOnHover {
                 scheduleApplicationPreview(for: normalizedIndex)
-            } else {
-                startHoverMotion(at: normalizedIndex, isHovered: true)
             }
         } else {
             dismissApplicationPreview()

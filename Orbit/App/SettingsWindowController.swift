@@ -12,6 +12,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private static let contentSize = SettingsWindowMetrics.contentSize
     private let presentationState: SettingsPresentationState
     private let onClose: ((SettingsWindowController) -> Void)?
+    private var didNotifyClose = false
 
     init(
         settings: AppSettings,
@@ -87,6 +88,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func show() {
         guard let window else { return }
+        didNotifyClose = false
         presentationState.isPresented = true
         if window.contentView?.bounds.size != Self.contentSize {
             window.setContentSize(Self.contentSize)
@@ -106,6 +108,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         presentationState.isPresented = false
+        guard !didNotifyClose else { return }
+        didNotifyClose = true
         onClose?(self)
     }
 }
@@ -380,6 +384,7 @@ private enum SettingsGridMetrics {
     static let windowHorizontalInset: CGFloat = 24
     static let labelWidth: CGFloat = 124
     static let columnSpacing: CGFloat = 14
+    static let segmentedControlWidth: CGFloat = 270
 }
 
 private struct SettingsSection<Trailing: View, Content: View>: View {
@@ -517,7 +522,10 @@ private struct AnimationStyleRow: View {
                 selection: $selection,
                 isEnabled: isEnabled
             )
-            .frame(maxWidth: .infinity)
+            .frame(
+                width: SettingsGridMetrics.segmentedControlWidth,
+                alignment: .trailing
+            )
         }
         .frame(height: 36)
     }
@@ -535,7 +543,10 @@ private struct ShapeStyleRow: View {
                 )
             )
             ShapeStyleSelector(selection: $selection)
-                .frame(maxWidth: .infinity)
+                .frame(
+                    width: SettingsGridMetrics.segmentedControlWidth,
+                    alignment: .trailing
+                )
         }
         .frame(height: 36)
     }
@@ -559,7 +570,7 @@ private struct ShapeStyleSelector: View {
         }
         .labelsHidden()
         .pickerStyle(.segmented)
-        .controlSize(.small)
+        .controlSize(.regular)
         .accessibilityLabel(
             OrbitL10n.text(
                 "settings.shape.accessibility",
@@ -590,7 +601,7 @@ private struct AnimationStyleSelector: View {
         }
         .labelsHidden()
         .pickerStyle(.segmented)
-        .controlSize(.small)
+        .controlSize(.regular)
         .accessibilityLabel(
             OrbitL10n.text(
                 "settings.animation.style.accessibility",
