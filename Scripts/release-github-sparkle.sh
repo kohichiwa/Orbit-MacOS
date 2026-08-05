@@ -18,6 +18,7 @@ UPDATES_DIR="$RELEASE_DIR/updates"
 ARCHIVE_NAME="$APP_NAME-$VERSION.zip"
 ARCHIVE_PATH="$UPDATES_DIR/$ARCHIVE_NAME"
 APPCAST_URL="https://github.com/$REPO_SLUG/releases/latest/download/appcast.xml"
+DOWNLOAD_URL_PREFIX="https://github.com/$REPO_SLUG/releases/download/v$VERSION"
 
 if [[ -z "${ORBIT_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
   echo "ORBIT_SPARKLE_PUBLIC_ED_KEY is required."
@@ -59,15 +60,12 @@ if [[ -z "$SPARKLE_BIN" || ! -x "$SPARKLE_BIN/generate_appcast" ]]; then
 fi
 
 GENERATE_APPCAST_ARGS=()
+GENERATE_APPCAST_ARGS+=(--download-url-prefix "$DOWNLOAD_URL_PREFIX")
 if [[ -n "${ORBIT_SPARKLE_PRIVATE_ED_KEY_FILE:-}" ]]; then
   GENERATE_APPCAST_ARGS+=(--ed-key-file "$ORBIT_SPARKLE_PRIVATE_ED_KEY_FILE")
 fi
 
-if [[ ${#GENERATE_APPCAST_ARGS[@]} -gt 0 ]]; then
-  "$SPARKLE_BIN/generate_appcast" "${GENERATE_APPCAST_ARGS[@]}" "$UPDATES_DIR"
-else
-  "$SPARKLE_BIN/generate_appcast" "$UPDATES_DIR"
-fi
+"$SPARKLE_BIN/generate_appcast" "${GENERATE_APPCAST_ARGS[@]}" "$UPDATES_DIR"
 
 gh release create "v$VERSION" \
   "$ARCHIVE_PATH" \
