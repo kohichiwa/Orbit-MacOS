@@ -207,6 +207,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         button.contentTintColor = nil
         button.wantsLayer = true
         button.layer?.masksToBounds = true
+        button.layer?.actions = [
+            "bounds": NSNull(),
+            "contents": NSNull(),
+            "opacity": NSNull(),
+            "position": NSNull(),
+            "shadowColor": NSNull(),
+            "shadowOpacity": NSNull(),
+            "shadowPath": NSNull(),
+            "shadowRadius": NSNull()
+        ]
         button.layer?.shadowOpacity = 0
         button.layer?.shadowRadius = 0
         button.layer?.shadowColor = nil
@@ -454,15 +464,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         )
         artworkRenderer = renderer
 
-        statusItem.length = StatusItemArtwork.preferredWidth(
-            for: count,
-            sizeScale: indicatorSizeScale,
-            spacingScale: indicatorSpacingScale
+        setStatusItemLength(
+            StatusItemArtwork.preferredWidth(
+                for: count,
+                sizeScale: indicatorSizeScale,
+                spacingScale: indicatorSpacingScale
+            )
         )
-        statusItemLength = statusItem.length
-
-        button.image = renderer.image
-        button.contentTintColor = nil
+        setStatusItemImage(renderer.image)
 
         if let index = viewModel.activeIndex, (0..<count).contains(index) {
             transitionSourceIndex = nil
@@ -725,8 +734,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if let artworkRenderer {
             let desiredLength = artworkRenderer.currentStatusItemWidth
             if abs(desiredLength - (statusItemLength ?? 0)) > 0.01 {
-                statusItem.length = desiredLength
-                statusItemLength = desiredLength
+                setStatusItemLength(desiredLength)
             }
         }
         statusItem.button?.needsDisplay = true
@@ -753,6 +761,33 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 indicatorKinds: renderedIndicatorKinds
             )
         )
+    }
+
+    private func setStatusItemLength(_ length: CGFloat) {
+        withoutImplicitStatusItemAnimations {
+            statusItem.length = length
+        }
+        statusItemLength = length
+    }
+
+    private func setStatusItemImage(_ image: NSImage) {
+        withoutImplicitStatusItemAnimations {
+            statusItem.button?.image = image
+            statusItem.button?.contentTintColor = nil
+        }
+    }
+
+    private func withoutImplicitStatusItemAnimations(
+        _ updates: () -> Void
+    ) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            updates()
+        }
+        CATransaction.commit()
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
