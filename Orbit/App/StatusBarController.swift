@@ -98,6 +98,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private let viewModel: SpaceViewModel
     private let settings: AppSettings
+    private let appUpdater: AppUpdater
     private let spaceApplicationReader: any SpaceApplicationReading
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var cancellables = Set<AnyCancellable>()
@@ -143,11 +144,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     init(
         viewModel: SpaceViewModel,
         settings: AppSettings,
+        appUpdater: AppUpdater = AppUpdater(),
         spaceApplicationReader: any SpaceApplicationReading =
             SystemSpaceApplicationReader()
     ) {
         self.viewModel = viewModel
         self.settings = settings
+        self.appUpdater = appUpdater
         self.spaceApplicationReader = spaceApplicationReader
         presentedSizeScale = CGFloat(settings.indicatorSizeScale)
         presentedSpacingScale = CGFloat(settings.indicatorSpacingScale)
@@ -1336,6 +1339,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         )
         settingsItem.keyEquivalentModifierMask = [.command]
         menu.addItem(settingsItem)
+        menu.addItem(appUpdater.makeCheckForUpdatesMenuItem())
         menu.addItem(.separator())
         menu.addItem(
             item(

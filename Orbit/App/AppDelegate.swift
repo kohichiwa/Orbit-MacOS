@@ -4,12 +4,14 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let viewModel: SpaceViewModel
     let settings: AppSettings
+    private let appUpdater: AppUpdater
     private var statusBarController: StatusBarController?
     private var activationRefreshTask: Task<Void, Never>?
 
     override init() {
         let settings = AppSettings()
         self.settings = settings
+        appUpdater = AppUpdater()
         viewModel = SpaceViewModel(colorAssignments: settings)
         super.init()
     }
@@ -19,7 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         let statusBarController = StatusBarController(
             viewModel: viewModel,
-            settings: settings
+            settings: settings,
+            appUpdater: appUpdater
         )
         self.statusBarController = statusBarController
         configureMainMenu(target: statusBarController)
@@ -58,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = target
         applicationMenu.addItem(settingsItem)
+
+        applicationMenu.addItem(appUpdater.makeCheckForUpdatesMenuItem())
         applicationMenu.addItem(.separator())
 
         let quitItem = NSMenuItem(

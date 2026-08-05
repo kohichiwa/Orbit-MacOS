@@ -6,3 +6,4 @@ build/
 *.xcscmblueprint
 xcuserdata/
 *.xcuserstate
+*.profraw

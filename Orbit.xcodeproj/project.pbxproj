@@ -21,6 +21,10 @@
 		140BB601300A400000EC7D72 /* OrbitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OrbitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXBuildFile section */
+		7F123A062F1B4B6500800001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 7F123A052F1B4B6500800001 /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		140BB566300A3DFD00EC7D72 /* Orbit */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -39,6 +43,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7F123A062F1B4B6500800001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +85,7 @@
 				140BB560300A3DFD00EC7D72 /* Sources */,
 				140BB561300A3DFD00EC7D72 /* Frameworks */,
 				140BB562300A3DFD00EC7D72 /* Resources */,
+				7F123A072F1B4B6500800001 /* Configure Sparkle Info.plist */,
 			);
 			buildRules = (
 			);
@@ -90,6 +96,7 @@
 			);
 			name = Orbit;
 			packageProductDependencies = (
+				7F123A052F1B4B6500800001 /* Sparkle */,
 			);
 			productName = Orbit;
 			productReference = 140BB564300A3DFD00EC7D72 /* Orbit.app */;
@@ -148,13 +155,16 @@
 				uk,
 				be,
 				es,
-				zh-Hans,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 140BB55B300A3DFD00EC7D72;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 140BB565300A3DFD00EC7D72 /* Products */;
+			packageReferences = (
+				7F123A042F1B4B6500800001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -180,6 +190,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		7F123A072F1B4B6500800001 /* Configure Sparkle Info.plist */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Configure Sparkle Info.plist";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\ninfo_plist=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\nplistbuddy=/usr/libexec/PlistBuddy\nset_value() {\n    key=\"$1\"\n    type=\"$2\"\n    value=\"$3\"\n    \"$plistbuddy\" -c \"Set :$key $value\" \"$info_plist\" 2>/dev/null || \\\n        \"$plistbuddy\" -c \"Add :$key $type $value\" \"$info_plist\"\n}\nset_value SUFeedURL string \"$ORBIT_SPARKLE_FEED_URL\"\nset_value SUEnableAutomaticChecks bool true\nif [ -n \"${ORBIT_SPARKLE_PUBLIC_ED_KEY:-}\" ]; then\n    set_value SUPublicEDKey string \"$ORBIT_SPARKLE_PUBLIC_ED_KEY\"\nelse\n    \"$plistbuddy\" -c \"Delete :SUPublicEDKey\" \"$info_plist\" 2>/dev/null || true\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		140BB560300A3DFD00EC7D72 /* Sources */ = {
@@ -352,6 +384,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				ORBIT_SPARKLE_FEED_URL = "https://github.com/kohichiwa/Orbit-MacOS/releases/latest/download/appcast.xml";
 				PRODUCT_BUNDLE_IDENTIFIER = kokha.Orbit;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -399,6 +432,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				ORBIT_SPARKLE_FEED_URL = "https://github.com/kohichiwa/Orbit-MacOS/releases/latest/download/appcast.xml";
 				PRODUCT_BUNDLE_IDENTIFIER = kokha.Orbit;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -481,6 +515,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7F123A042F1B4B6500800001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7F123A052F1B4B6500800001 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7F123A042F1B4B6500800001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 140BB55C300A3DFD00EC7D72 /* Project object */;
 }

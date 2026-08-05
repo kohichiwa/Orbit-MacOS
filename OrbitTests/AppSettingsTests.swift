@@ -148,6 +148,7 @@ final class AppSettingsTests: XCTestCase {
     func testEnglishAndRussianCatalogsContainTheSameLocalizedKeys() throws {
         let requiredKeys: Set<String> = [
             "menu.settings",
+            "menu.checkForUpdates",
             "menu.quit",
             "settings.window.title",
             "settings.section.appearance",
