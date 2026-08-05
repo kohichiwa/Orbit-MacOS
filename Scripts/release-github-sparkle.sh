@@ -63,7 +63,11 @@ if [[ -n "${ORBIT_SPARKLE_PRIVATE_ED_KEY_FILE:-}" ]]; then
   GENERATE_APPCAST_ARGS+=(--ed-key-file "$ORBIT_SPARKLE_PRIVATE_ED_KEY_FILE")
 fi
 
-"$SPARKLE_BIN/generate_appcast" "${GENERATE_APPCAST_ARGS[@]}" "$UPDATES_DIR"
+if [[ ${#GENERATE_APPCAST_ARGS[@]} -gt 0 ]]; then
+  "$SPARKLE_BIN/generate_appcast" "${GENERATE_APPCAST_ARGS[@]}" "$UPDATES_DIR"
+else
+  "$SPARKLE_BIN/generate_appcast" "$UPDATES_DIR"
+fi
 
 gh release create "v$VERSION" \
   "$ARCHIVE_PATH" \
