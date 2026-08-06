@@ -14,12 +14,6 @@ private typealias OrbitCGSCopyWindowsWithOptionsAndTagsFunction =
         UnsafeMutablePointer<UInt64>,
         UnsafeMutablePointer<UInt64>
     ) -> Unmanaged<CFArray>?
-private typealias OrbitCGSCopySpacesForWindowsFunction = @convention(c) (
-    OrbitApplicationCGSConnectionID,
-    UInt64,
-    CFArray
-) -> Unmanaged<CFArray>?
-
 private enum OrbitSpaceWindowSymbols {
     nonisolated static let defaultConnection = resolve(
         "_CGSDefaultConnection",
@@ -29,17 +23,6 @@ private enum OrbitSpaceWindowSymbols {
         "CGSCopyWindowsWithOptionsAndTags",
         as: OrbitCGSCopyWindowsWithOptionsAndTagsFunction.self
     )
-    nonisolated static let copySpacesForWindows = resolve(
-        "CGSCopySpacesForWindows",
-        as: OrbitCGSCopySpacesForWindowsFunction.self
-    )
-
-    nonisolated static let cgsSpaceIncludesCurrent: UInt64 = 1 << 0
-    nonisolated static let cgsSpaceIncludesOthers: UInt64 = 1 << 1
-    nonisolated static let cgsSpaceIncludesUser: UInt64 = 1 << 2
-    nonisolated static let cgsAllSpacesMask: UInt64 =
-        cgsSpaceIncludesCurrent | cgsSpaceIncludesOthers | cgsSpaceIncludesUser
-
     nonisolated private static func resolve<Function>(
         _ name: String,
         as type: Function.Type
@@ -98,19 +81,13 @@ final class SystemSpaceApplicationReader: SpaceApplicationReading,
         let windowIdentifiers = rawWindowIdentifiers.map(\.uint32Value)
         let applicationContentOwners =
             applicationContentOwnersByWindowIdentifier()
+        // `copyWindows` is already scoped to the requested Space. Re-checking
+        // every window through a second WindowServer entry point is unreliable
+        // on macOS 26 and can turn a valid result into an empty preview.
         return processIdentifiers(
             windowIdentifiers: windowIdentifiers,
             excluding: ownProcessIdentifier
         ) { windowIdentifier in
-            guard
-                isWindow(
-                    windowIdentifier,
-                    in: spaceIdentifier,
-                    on: connection
-                )
-            else {
-                return nil
-            }
             return applicationContentOwners[windowIdentifier]
         }
     }
@@ -194,26 +171,5 @@ final class SystemSpaceApplicationReader: SpaceApplicationReading,
             processIdentifiers.append(processIdentifier)
         }
         return processIdentifiers
-    }
-
-    nonisolated private static func isWindow(
-        _ identifier: CGWindowID,
-        in spaceIdentifier: Int64,
-        on connection: OrbitApplicationCGSConnectionID
-    ) -> Bool {
-        guard let copySpacesForWindows = OrbitSpaceWindowSymbols.copySpacesForWindows else {
-            return true
-        }
-
-        let windowIDs = [NSNumber(value: identifier)] as CFArray
-        guard let rawSpaces = copySpacesForWindows(
-            connection,
-            OrbitSpaceWindowSymbols.cgsAllSpacesMask,
-            windowIDs
-        )?.takeRetainedValue() as? [NSNumber] else {
-            return false
-        }
-
-        return rawSpaces.contains { $0.int64Value == spaceIdentifier }
     }
 }

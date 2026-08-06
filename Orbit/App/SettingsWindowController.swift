@@ -363,10 +363,27 @@ private struct SettingsControls: View {
                     .foregroundStyle(.red)
                     .lineLimit(2)
             }
+
+            Spacer(minLength: 0)
+
+            Text(OrbitVersion.displayText)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(.horizontal, SettingsGridMetrics.windowHorizontalInset)
         .padding(.top, 10)
         .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+private enum OrbitVersion {
+    static var displayText: String {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "1.0"
+        return "Orbit \(version)"
     }
 }
 
@@ -518,6 +535,7 @@ private struct AnimationStyleRow: View {
                     fallback: "Стиль"
                 )
             )
+            Spacer(minLength: 0)
             AnimationStyleSelector(
                 selection: $selection,
                 isEnabled: isEnabled
@@ -542,6 +560,7 @@ private struct ShapeStyleRow: View {
                     fallback: "Форма"
                 )
             )
+            Spacer(minLength: 0)
             ShapeStyleSelector(selection: $selection)
                 .frame(
                     width: SettingsGridMetrics.segmentedControlWidth,
@@ -556,30 +575,17 @@ private struct ShapeStyleSelector: View {
     @Binding var selection: IndicatorShapeStyle
 
     var body: some View {
-        Picker(
-            OrbitL10n.text(
-                "settings.shape.accessibility",
-                fallback: "Форма индикаторов"
-            ),
-            selection: $selection
-        ) {
-            ForEach(IndicatorShapeStyle.allCases) { style in
-                Text(style.title)
-                    .tag(style)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .controlSize(.regular)
-        .accessibilityLabel(
+        NativeSegmentedControl(
+            options: IndicatorShapeStyle.allCases,
+            selection: $selection,
+            title: \.title,
+            accessibilityLabel:
             OrbitL10n.text(
                 "settings.shape.accessibility",
                 fallback: "Форма индикаторов"
             )
         )
-        .accessibilityValue(selection.title)
     }
-
 }
 
 private struct AnimationStyleSelector: View {
@@ -587,31 +593,70 @@ private struct AnimationStyleSelector: View {
     let isEnabled: Bool
 
     var body: some View {
-        Picker(
+        NativeSegmentedControl(
+            options: IndicatorAnimationStyle.allCases,
+            selection: $selection,
+            title: \.title,
+            accessibilityLabel:
             OrbitL10n.text(
                 "settings.animation.style.accessibility",
                 fallback: "Стиль анимации"
             ),
-            selection: $selection
-        ) {
-            ForEach(IndicatorAnimationStyle.allCases) { style in
-                Text(style.title)
-                    .tag(style)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .controlSize(.regular)
-        .accessibilityLabel(
-            OrbitL10n.text(
-                "settings.animation.style.accessibility",
-                fallback: "Стиль анимации"
-            )
+            isEnabled: isEnabled
         )
-        .accessibilityValue(selection.title)
-        .disabled(!isEnabled)
+    }
+}
+
+private struct NativeSegmentedControl<Option: Hashable>: NSViewRepresentable {
+    let options: [Option]
+    @Binding var selection: Option
+    let title: (Option) -> String
+    let accessibilityLabel: String
+    var isEnabled = true
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
     }
 
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl()
+        control.segmentStyle = .automatic
+        control.trackingMode = .selectOne
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.selectionChanged(_:))
+        configure(control)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        configure(control)
+    }
+
+    private func configure(_ control: NSSegmentedControl) {
+        control.segmentCount = options.count
+        control.isEnabled = isEnabled
+        control.setAccessibilityLabel(accessibilityLabel)
+        control.setAccessibilityValue(title(selection))
+        for (index, option) in options.enumerated() {
+            control.setLabel(title(option), forSegment: index)
+            control.setSelected(option == selection, forSegment: index)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: NativeSegmentedControl
+
+        init(parent: NativeSegmentedControl) {
+            self.parent = parent
+        }
+
+        @objc func selectionChanged(_ sender: NSSegmentedControl) {
+            let index = sender.selectedSegment
+            guard parent.options.indices.contains(index) else { return }
+            parent.selection = parent.options[index]
+        }
+    }
 }
 
 private struct DemoVisualConfiguration: Equatable {
