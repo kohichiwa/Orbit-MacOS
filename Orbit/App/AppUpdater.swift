@@ -12,7 +12,7 @@ final class AppUpdater {
 
     init() {
 #if canImport(Sparkle)
-        updaterController = Self.hasSparkleConfiguration
+        updaterController = Self.shouldStartUpdater
             ? SPUStandardUpdaterController(
                 startingUpdater: true,
                 updaterDelegate: nil,
@@ -47,6 +47,16 @@ final class AppUpdater {
     }
 
 #if canImport(Sparkle)
+    private static var shouldStartUpdater: Bool {
+#if DEBUG
+        // A development build cannot safely replace itself inside Xcode's
+        // DerivedData directory. Update behavior is verified with Release builds.
+        return false
+#else
+        return hasSparkleConfiguration
+#endif
+    }
+
     private static var hasSparkleConfiguration: Bool {
         let bundle = Bundle.main
         return hasConfiguredValue(for: "SUFeedURL", in: bundle)
