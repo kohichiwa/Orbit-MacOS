@@ -575,16 +575,27 @@ private struct ShapeStyleSelector: View {
     @Binding var selection: IndicatorShapeStyle
 
     var body: some View {
-        NativeSegmentedControl(
-            options: IndicatorShapeStyle.allCases,
-            selection: $selection,
-            title: \.title,
-            accessibilityLabel:
-            OrbitL10n.text(
-                "settings.shape.accessibility",
-                fallback: "Форма индикаторов"
-            )
+        let accessibilityLabel = OrbitL10n.text(
+            "settings.shape.accessibility",
+            fallback: "Форма индикаторов"
         )
+        if #available(macOS 26.0, *) {
+            ShapeSegmentedControl(
+                selection: $selection,
+                accessibilityLabel: accessibilityLabel
+            )
+        } else {
+            Picker(accessibilityLabel, selection: $selection) {
+                ForEach(IndicatorShapeStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.regular)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(selection.title)
+        }
     }
 }
 
@@ -593,26 +604,35 @@ private struct AnimationStyleSelector: View {
     let isEnabled: Bool
 
     var body: some View {
-        NativeSegmentedControl(
-            options: IndicatorAnimationStyle.allCases,
-            selection: $selection,
-            title: \.title,
-            accessibilityLabel:
-            OrbitL10n.text(
-                "settings.animation.style.accessibility",
-                fallback: "Стиль анимации"
-            ),
-            isEnabled: isEnabled
+        let accessibilityLabel = OrbitL10n.text(
+            "settings.animation.style.accessibility",
+            fallback: "Стиль анимации"
         )
+        if #available(macOS 26.0, *) {
+            AnimationSegmentedControl(
+                selection: $selection,
+                accessibilityLabel: accessibilityLabel,
+                isEnabled: isEnabled
+            )
+        } else {
+            Picker(accessibilityLabel, selection: $selection) {
+                ForEach(IndicatorAnimationStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.regular)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(selection.title)
+            .disabled(!isEnabled)
+        }
     }
 }
 
-private struct NativeSegmentedControl<Option: Hashable>: NSViewRepresentable {
-    let options: [Option]
-    @Binding var selection: Option
-    let title: (Option) -> String
+private struct ShapeSegmentedControl: NSViewRepresentable {
+    @Binding var selection: IndicatorShapeStyle
     let accessibilityLabel: String
-    var isEnabled = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -633,28 +653,91 @@ private struct NativeSegmentedControl<Option: Hashable>: NSViewRepresentable {
         configure(control)
     }
 
+    static func dismantleNSView(_ control: NSSegmentedControl, coordinator: Coordinator) {
+        control.target = nil
+        control.action = nil
+    }
+
     private func configure(_ control: NSSegmentedControl) {
+        let options = IndicatorShapeStyle.allCases
         control.segmentCount = options.count
-        control.isEnabled = isEnabled
         control.setAccessibilityLabel(accessibilityLabel)
-        control.setAccessibilityValue(title(selection))
+        control.setAccessibilityValue(selection.title)
         for (index, option) in options.enumerated() {
-            control.setLabel(title(option), forSegment: index)
+            control.setLabel(option.title, forSegment: index)
             control.setSelected(option == selection, forSegment: index)
         }
     }
 
     final class Coordinator: NSObject {
-        var parent: NativeSegmentedControl
+        var parent: ShapeSegmentedControl
 
-        init(parent: NativeSegmentedControl) {
+        init(parent: ShapeSegmentedControl) {
             self.parent = parent
         }
 
         @objc func selectionChanged(_ sender: NSSegmentedControl) {
             let index = sender.selectedSegment
-            guard parent.options.indices.contains(index) else { return }
-            parent.selection = parent.options[index]
+            let options = IndicatorShapeStyle.allCases
+            guard options.indices.contains(index) else { return }
+            parent.selection = options[index]
+        }
+    }
+}
+
+private struct AnimationSegmentedControl: NSViewRepresentable {
+    @Binding var selection: IndicatorAnimationStyle
+    let accessibilityLabel: String
+    let isEnabled: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl()
+        control.segmentStyle = .automatic
+        control.trackingMode = .selectOne
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.selectionChanged(_:))
+        configure(control)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        configure(control)
+    }
+
+    static func dismantleNSView(_ control: NSSegmentedControl, coordinator: Coordinator) {
+        control.target = nil
+        control.action = nil
+    }
+
+    private func configure(_ control: NSSegmentedControl) {
+        let options = IndicatorAnimationStyle.allCases
+        control.segmentCount = options.count
+        control.isEnabled = isEnabled
+        control.setAccessibilityLabel(accessibilityLabel)
+        control.setAccessibilityValue(selection.title)
+        for (index, option) in options.enumerated() {
+            control.setLabel(option.title, forSegment: index)
+            control.setSelected(option == selection, forSegment: index)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: AnimationSegmentedControl
+
+        init(parent: AnimationSegmentedControl) {
+            self.parent = parent
+        }
+
+        @objc func selectionChanged(_ sender: NSSegmentedControl) {
+            let options = IndicatorAnimationStyle.allCases
+            let index = sender.selectedSegment
+            guard options.indices.contains(index) else { return }
+            parent.selection = options[index]
         }
     }
 }
