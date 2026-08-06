@@ -80,7 +80,9 @@ final class SystemSpaceApplicationReader: SpaceApplicationReading,
 
         let windowIdentifiers = rawWindowIdentifiers.map(\.uint32Value)
         let applicationContentOwners =
-            applicationContentOwnersByWindowIdentifier()
+            applicationContentOwnersByWindowIdentifier(
+                windowIdentifiers: rawWindowIdentifiers
+            )
         // `copyWindows` is already scoped to the requested Space. Re-checking
         // every window through a second WindowServer entry point is unreliable
         // on macOS 26 and can turn a valid result into an empty preview.
@@ -97,8 +99,21 @@ final class SystemSpaceApplicationReader: SpaceApplicationReading,
     /// because its status item is visible there. Restricting the candidates to
     /// layer-zero, visible-sized content windows keeps the result tied to the
     /// application's actual windows instead of its process-wide UI helpers.
-    nonisolated private static func
-        applicationContentOwnersByWindowIdentifier() -> [CGWindowID: pid_t] {
+    nonisolated private static func applicationContentOwnersByWindowIdentifier(
+        windowIdentifiers: [NSNumber]
+    ) -> [CGWindowID: pid_t] {
+        // Asking WindowServer for the descriptions of the exact CGS result is
+        // important on macOS 26. A global window-list snapshot can omit an
+        // off-Space full-screen window even though CGS returned its identifier.
+        let exactWindowInformation = CGWindowListCreateDescriptionFromArray(
+            windowIdentifiers as CFArray
+        ) as? [[String: Any]]
+        if let exactWindowInformation, !exactWindowInformation.isEmpty {
+            return applicationContentOwners(
+                from: exactWindowInformation
+            )
+        }
+
         guard
             let rawWindowInformation = CGWindowListCopyWindowInfo(
                 [.optionAll],
@@ -106,9 +121,15 @@ final class SystemSpaceApplicationReader: SpaceApplicationReading,
             ) as? [[String: Any]]
         else { return [:] }
 
+        return applicationContentOwners(from: rawWindowInformation)
+    }
+
+    nonisolated static func applicationContentOwners(
+        from windowInformation: [[String: Any]]
+    ) -> [CGWindowID: pid_t] {
         var owners: [CGWindowID: pid_t] = [:]
-        owners.reserveCapacity(rawWindowInformation.count)
-        for information in rawWindowInformation {
+        owners.reserveCapacity(windowInformation.count)
+        for information in windowInformation {
             guard
                 let windowNumber = information[
                     kCGWindowNumber as String

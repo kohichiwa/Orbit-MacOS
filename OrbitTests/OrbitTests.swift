@@ -1804,6 +1804,23 @@ final class SpaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testStatusItemFrameImagesAlternateWithoutCopyingBitmap() throws {
+        let renderer = StatusIndicatorImageRenderer(count: 4)
+
+        let first = renderer.nextStatusItemImage()
+        let second = renderer.nextStatusItemImage()
+        let third = renderer.nextStatusItemImage()
+        let firstBitmap = try XCTUnwrap(first.representations.first)
+        let secondBitmap = try XCTUnwrap(second.representations.first)
+
+        XCTAssertFalse(first === second)
+        XCTAssertTrue(first === third)
+        XCTAssertTrue(firstBitmap === secondBitmap)
+        XCTAssertFalse(first.isTemplate)
+        XCTAssertFalse(second.isTemplate)
+    }
+
+    @MainActor
     func testIncreasedContrastStrengthensIndicatorsWithoutChangingGeometry() throws {
         let kinds: [SpaceIndicatorKind] = [
             .desktop(colorIndex: 0),

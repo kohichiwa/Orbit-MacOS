@@ -30,6 +30,8 @@ nonisolated final class StatusIndicatorImageRenderer {
     let count: Int
     let imageSize: NSSize
     let image: NSImage
+    private let alternateStatusItemImage: NSImage
+    private var usesAlternateStatusItemImage = false
 
     private(set) var pill: StatusPillFrame?
     private(set) var activeIndex: Int?
@@ -201,8 +203,25 @@ nonisolated final class StatusIndicatorImageRenderer {
         image.isTemplate = false
         self.image = image
 
+        let alternateStatusItemImage = NSImage(size: imageSize)
+        alternateStatusItemImage.addRepresentation(bitmap)
+        alternateStatusItemImage.cacheMode = .never
+        alternateStatusItemImage.isTemplate = false
+        self.alternateStatusItemImage = alternateStatusItemImage
+
         currentStatusItemWidth = baseStatusItemWidth
         redraw()
+    }
+
+    /// Tahoe caches an image already assigned to an NSStatusBarButton even
+    /// when its mutable bitmap representation changes. Alternating two cheap
+    /// wrappers around the same bitmap invalidates that cache without copying
+    /// the pixels on every display-link frame.
+    func nextStatusItemImage() -> NSImage {
+        usesAlternateStatusItemImage.toggle()
+        return usesAlternateStatusItemImage
+            ? alternateStatusItemImage
+            : image
     }
 
     func setApplicationPreview(

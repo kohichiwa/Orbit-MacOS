@@ -1592,24 +1592,6 @@ private struct IndicatorColorPalette: View, Animatable {
     var verticalOffset: CGFloat
     var pointerOffset: CGFloat
     let selectColor: (PaletteColor) -> Void
-    private var selectedColorOffset: CGFloat
-
-    init(
-        selectedColorID: String?,
-        horizontalOffset: CGFloat,
-        verticalOffset: CGFloat,
-        pointerOffset: CGFloat,
-        selectColor: @escaping (PaletteColor) -> Void
-    ) {
-        self.selectedColorID = selectedColorID
-        self.horizontalOffset = horizontalOffset
-        self.verticalOffset = verticalOffset
-        self.pointerOffset = pointerOffset
-        self.selectColor = selectColor
-        selectedColorOffset = Self.colorOffset(
-            for: selectedColorID
-        )
-    }
 
     var animatableData:
         AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
@@ -1643,6 +1625,15 @@ private struct IndicatorColorPalette: View, Animatable {
                                     lineWidth: 0.7
                                 )
                                 .frame(width: 16.5, height: 16.5)
+                            if choice.id == selectedColorID {
+                                Circle()
+                                    .strokeBorder(
+                                        Color.primary.opacity(0.76),
+                                        lineWidth: 1.5
+                                    )
+                                    .frame(width: 22.5, height: 22.5)
+                                    .allowsHitTesting(false)
+                            }
                         }
                         .frame(width: 26.5, height: 26.5)
                         .contentShape(Circle())
@@ -1665,24 +1656,6 @@ private struct IndicatorColorPalette: View, Animatable {
                     )
                 }
             }
-
-            Canvas { context, size in
-                guard selectedColorID != nil else { return }
-                let ringSize: CGFloat = 22.5
-                let ringRect = CGRect(
-                    x: size.width / 2 - ringSize / 2
-                        + selectedColorOffset,
-                    y: size.height / 2 - ringSize / 2,
-                    width: ringSize,
-                    height: ringSize
-                )
-                context.stroke(
-                    Path(ellipseIn: ringRect),
-                    with: .color(Color.primary.opacity(0.76)),
-                    lineWidth: 1.5
-                )
-            }
-                .allowsHitTesting(false)
         }
         .padding(.horizontal, 8)
         .frame(width: Self.width, height: Self.bodyHeight)
@@ -1701,21 +1674,6 @@ private struct IndicatorColorPalette: View, Animatable {
             )
         )
         .accessibilityIdentifier("orbit.demo.colorPicker")
-    }
-
-    private static func colorOffset(
-        for selectedColorID: String?
-    ) -> CGFloat {
-        guard
-            let selectedColorID,
-            let index = PaletteColor.choices.firstIndex(
-                where: { $0.id == selectedColorID }
-            )
-        else { return 0 }
-        let itemStep: CGFloat = 26.5 + 8
-        let centeredIndex = CGFloat(index)
-            - CGFloat(PaletteColor.choices.count - 1) / 2
-        return centeredIndex * itemStep
     }
 }
 

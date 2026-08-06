@@ -114,6 +114,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var interruptedTransitionPresentation:
         StatusInterruptedTransitionPresentation?
     private var hoverTrackingView: StatusHoverTrackingView?
+    private var hoverExitTask: Task<Void, Never>?
     private var globalMouseMonitor: Any?
     private var globalSpaceGestureMonitor: Any?
     private var hoveredIndex: Int?
@@ -187,6 +188,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         applicationPreviewTracksPill = false
         applicationPreviewApplications.removeAll()
         applicationPreviewIndex = nil
+        hoverExitTask?.cancel()
+        hoverExitTask = nil
 
         stopGlobalMouseMonitoring()
         stopGlobalSpaceGestureMonitoring()
@@ -365,14 +368,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             [weak self, weak button] event in
             guard let self, let button else { return }
             if let event {
+                self.hoverExitTask?.cancel()
+                self.hoverExitTask = nil
                 self.updateHover(with: event, in: button)
             } else {
                 // AppKit can emit a transient exit while an NSStatusItem is
                 // changing width. Re-read the actual pointer position after
                 // that layout pass instead of collapsing a preview that is
                 // still under the cursor.
-                DispatchQueue.main.async { [weak self, weak button] in
-                    guard let self, let button else { return }
+                self.hoverExitTask?.cancel()
+                self.hoverExitTask = Task { @MainActor [weak self, weak button] in
+                    try? await Task.sleep(for: .milliseconds(50))
+                    guard !Task.isCancelled, let self, let button else {
+                        return
+                    }
+                    self.hoverExitTask = nil
                     self.synchronizeHoverLocation(for: button)
                 }
             }
@@ -737,7 +747,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 setStatusItemLength(desiredLength)
             }
         }
-        statusItem.button?.needsDisplay = true
+        guard let button = statusItem.button else { return }
+        if #available(macOS 26.0, *), let artworkRenderer {
+            setStatusItemImage(artworkRenderer.nextStatusItemImage())
+        } else {
+            button.needsDisplay = true
+        }
     }
 
     private func stopPillMotion() {
@@ -829,6 +844,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         with event: NSEvent,
         in button: NSStatusBarButton
     ) {
+        hoverExitTask?.cancel()
+        hoverExitTask = nil
         let point = button.convert(event.locationInWindow, from: nil)
         setHoveredIndex(indicatorIndex(at: point, in: button))
     }

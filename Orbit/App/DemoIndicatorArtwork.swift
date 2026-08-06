@@ -179,7 +179,9 @@ final class SyncedIndicatorArtworkView: NSView {
         renderer.image.draw(
             at: origin,
             from: NSRect(origin: .zero, size: renderer.imageSize),
-            operation: .sourceOver,
+            // Replace transparent pixels as well. `.sourceOver` can preserve
+            // pieces of the previous frame in Tahoe's layer-backed NSView.
+            operation: .copy,
             fraction: 1
         )
     }
